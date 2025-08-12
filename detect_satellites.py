@@ -274,30 +274,86 @@ def run_cenpb_finder(bed_file, genome_file, output_file, pattern="YTTCGTTGGAARCG
     return cenpb_data
 
 
+def score_centromere_likelihood(window, kmer_percent, cenpb_density, array_size, is_minimum=False):
+    """
+    Calculate centromere likelihood score based on multiple features.
+    
+    Returns score 0-100 and detailed weights.
+    """
+    weights = {}
+    
+    # 1. K-mer diversity score (30% weight) - lower is better
+    if kmer_percent < 2:
+        weights['kmer'] = 30
+    elif kmer_percent < 5:
+        weights['kmer'] = 25
+    elif kmer_percent < 10:
+        weights['kmer'] = 15
+    elif kmer_percent < 15:
+        weights['kmer'] = 5
+    else:
+        weights['kmer'] = 0
+    
+    # 2. CENP-B box density score (40% weight) - most important
+    if cenpb_density > 0.3:  # High density
+        weights['cenpb'] = 40
+    elif cenpb_density > 0.2:
+        weights['cenpb'] = 35
+    elif cenpb_density > 0.1:
+        weights['cenpb'] = 25
+    elif cenpb_density > 0.05:
+        weights['cenpb'] = 15
+    elif cenpb_density > 0:
+        weights['cenpb'] = 5
+    else:
+        weights['cenpb'] = 0
+    
+    # 3. Array size context (20% weight)
+    if array_size > 5_000_000:  # >5 Mb
+        weights['array_size'] = 20
+    elif array_size > 2_000_000:  # >2 Mb
+        weights['array_size'] = 15
+    elif array_size > 1_000_000:  # >1 Mb
+        weights['array_size'] = 10
+    elif array_size > 500_000:  # >500 kb
+        weights['array_size'] = 5
+    else:
+        weights['array_size'] = 2
+    
+    # 4. Local minimum bonus (10% weight)
+    if is_minimum:
+        weights['local_minimum'] = 10
+    else:
+        weights['local_minimum'] = 0
+    
+    # Calculate total score (max 100)
+    total_score = sum(weights.values())
+    
+    return total_score, weights
+
+
 def find_centromere_candidates(regions, df, kmer_size, cenpb_data=None):
     """
-    Find potential centromere-containing regions as windows with minimal k-mer diversity
-    within large satellite arrays.
-    
-    Note: We identify regions that likely CONTAIN centromeres, not precise centromere
-    boundaries. Resolution is limited by window size (typically 100kb).
+    Find potential centromere-containing regions using multi-signal approach:
+    1. CENP-B box density (primary signal)
+    2. K-mer diversity minima
+    3. Large satellite array context
+    4. Local minimum within array
     
     Args:
         regions: Dictionary of low variability regions per chromosome
         df: Original dataframe with all windows
         kmer_size: K-mer size
+        cenpb_data: Dictionary with CENP-B box counts
     
     Returns:
-        List of windows that likely contain functional centromeres
+        List of windows likely containing functional centromeres, scored by confidence
     """
     centromeres = []
     
     for chrom, chrom_regions in regions.items():
-        # Search within large low-diversity regions (likely satellite arrays where centromeres reside)
-        large_regions = [r for r in chrom_regions if r[1] - r[0] >= 100000]
-        
-        if not large_regions:
-            continue
+        # Merge nearby regions into satellite arrays
+        merged_arrays = merge_adjacent_windows(chrom_regions, max_gap=500000)
         
         chrom_df = df[df['chromosome'] == chrom].copy()
         if 'kmer_percentage' not in chrom_df.columns:
@@ -305,38 +361,95 @@ def find_centromere_candidates(regions, df, kmer_size, cenpb_data=None):
             chrom_df['max_kmers'] = chrom_df['window_size'] - kmer_size + 1
             chrom_df['kmer_percentage'] = (chrom_df['kmer_count'] / chrom_df['max_kmers']) * 100
         
-        for start, end, mean_value in large_regions:
-            # Find windows within this region
-            region_windows = chrom_df[(chrom_df['start'] >= start) & 
-                                     (chrom_df['end'] <= end)]
+        # Analyze each satellite array
+        for array_start, array_end, array_mean in merged_arrays:
+            array_size = array_end - array_start
             
-            if len(region_windows) > 0:
-                # Find minimum variability window
-                min_idx = region_windows['kmer_percentage'].idxmin()
-                min_window = region_windows.loc[min_idx]
+            # Skip small arrays unlikely to contain centromeres
+            if array_size < 100000:
+                continue
+            
+            # Get all windows in this array
+            array_windows = chrom_df[(chrom_df['start'] >= array_start) & 
+                                    (chrom_df['end'] <= array_end)]
+            
+            if len(array_windows) == 0:
+                continue
+            
+            # Find local minima
+            min_idx = array_windows['kmer_percentage'].idxmin()
+            min_kmer_pct = array_windows.loc[min_idx, 'kmer_percentage']
+            
+            # Score each window in the array
+            window_scores = []
+            for idx, window in array_windows.iterrows():
+                # Get CENP-B data
+                window_key = f"{chrom}:{int(window['start'])}-{int(window['end'])}"
+                cenpb_density = 0
+                cenpb_count = 0
+                if cenpb_data and window_key in cenpb_data:
+                    cenpb_density = cenpb_data[window_key]['density']
+                    cenpb_count = cenpb_data[window_key]['count']
                 
-                # Check if this is significantly lower than region mean
-                if min_window['kmer_percentage'] < mean_value * 0.5:  # At least 50% lower
+                # Check if this is a local minimum
+                is_minimum = (idx == min_idx) or (window['kmer_percentage'] < array_mean * 0.7)
+                
+                # Calculate score
+                score, weights = score_centromere_likelihood(
+                    window,
+                    window['kmer_percentage'],
+                    cenpb_density,
+                    array_size,
+                    is_minimum
+                )
+                
+                window_scores.append({
+                    'window': window,
+                    'score': score,
+                    'weights': weights,
+                    'cenpb_density': cenpb_density,
+                    'cenpb_count': cenpb_count,
+                    'is_minimum': is_minimum
+                })
+            
+            # Select best scoring window(s) from this array
+            # If CENP-B data available, prioritize by score
+            # Otherwise fall back to minimum k-mer diversity
+            window_scores.sort(key=lambda x: x['score'], reverse=True)
+            
+            # Take the best scoring window (or multiple if score is high)
+            for ws in window_scores:
+                if ws['score'] >= 30:  # Minimum threshold
+                    window = ws['window']
                     cent_info = {
                         'chrom': chrom,
-                        'start': min_window['start'],
-                        'end': min_window['end'],
-                        'kmer_percentage': min_window['kmer_percentage'],
-                        'satellite_start': start,
-                        'satellite_end': end,
-                        'satellite_mean': mean_value
+                        'start': int(window['start']),
+                        'end': int(window['end']),
+                        'kmer_percentage': window['kmer_percentage'],
+                        'satellite_start': array_start,
+                        'satellite_end': array_end,
+                        'satellite_mean': array_mean,
+                        'array_size': array_size,
+                        'score': ws['score'],
+                        'weights': ws['weights'],
+                        'cenpb_count': ws['cenpb_count'],
+                        'cenpb_density': ws['cenpb_density'],
+                        'is_local_minimum': ws['is_minimum']
                     }
-                    
-                    # Add CENP-B box information if available
-                    if cenpb_data:
-                        key = f"{chrom}:{min_window['start']}-{min_window['end']}"
-                        if key in cenpb_data:
-                            cent_info['cenpb_count'] = cenpb_data[key]['count']
-                            cent_info['cenpb_density'] = cenpb_data[key]['density']
-                    
                     centromeres.append(cent_info)
+                    break  # Take only best per array (can be changed)
     
-    return centromeres
+    # Sort by score and select best per chromosome
+    centromeres.sort(key=lambda x: x['score'], reverse=True)
+    
+    # Keep only best centromere per chromosome
+    best_per_chrom = {}
+    for cent in centromeres:
+        chrom = cent['chrom']
+        if chrom not in best_per_chrom or cent['score'] > best_per_chrom[chrom]['score']:
+            best_per_chrom[chrom] = cent
+    
+    return list(best_per_chrom.values())
 
 
 def write_gff(regions, centromeres, output_file, source='VarProfiler'):
@@ -420,11 +533,26 @@ def write_gff(regions, centromeres, output_file, source='VarProfiler'):
             end = cent['end']
             score = f"{cent['kmer_percentage']:.2f}"
             
+            # Determine confidence level based on score
+            score = cent.get('score', 0)
+            if score >= 70:
+                confidence = 'high'
+                color = '255,0,0'  # Red for high confidence
+            elif score >= 50:
+                confidence = 'medium'
+                color = '255,128,0'  # Orange for medium
+            else:
+                confidence = 'low'
+                color = '255,255,0'  # Yellow for low
+            
             attributes = [
                 f"ID=centromere_containing_region_{feature_id}",
                 f"Name=centromere_region_{chrom}_{start}_{end}",
+                f"score={score}",
+                f"confidence={confidence}",
                 f"kmer_percent={cent['kmer_percentage']:.2f}",
                 f"satellite_region={cent['satellite_start']+1}..{cent['satellite_end']}",
+                f"array_size={cent.get('array_size', cent['satellite_end']-cent['satellite_start'])}",
                 f"satellite_mean={cent['satellite_mean']:.2f}"
             ]
             
@@ -435,7 +563,16 @@ def write_gff(regions, centromeres, output_file, source='VarProfiler'):
                     f"cenpb_density={cent['cenpb_density']:.3f}"
                 ])
             
-            attributes.append(f"color=0,0,255")  # Blue for centromeres
+            # Add scoring weights if available
+            if 'weights' in cent:
+                weight_str = ','.join([f"{k}={v}" for k, v in cent['weights'].items()])
+                attributes.append(f"score_weights={weight_str}")
+            
+            # Add local minimum flag
+            if 'is_local_minimum' in cent:
+                attributes.append(f"is_local_minimum={cent['is_local_minimum']}")
+            
+            attributes.append(f"color={color}")
             
             f.write(f"{chrom}\t{source}\tcentromere_containing_region\t{start}\t{end}\t"
                    f"{score}\t.\t.\t{';'.join(attributes)}\n")
@@ -818,11 +955,25 @@ def main():
         centromeres = find_centromere_candidates(regions, df, args.kmer_size, cenpb_data)
         print(f"  Found {len(centromeres)} potential centromeres")
         
-        # Report centromeres with CENP-B boxes
-        if cenpb_data:
-            cent_with_cenpb = sum(1 for c in centromeres if 'cenpb_count' in c and c['cenpb_count'] > 0)
-            if cent_with_cenpb > 0:
-                print(f"    {cent_with_cenpb} with CENP-B boxes")
+        # Report centromeres with confidence scores
+        if centromeres:
+            high_conf = sum(1 for c in centromeres if c.get('score', 0) >= 70)
+            med_conf = sum(1 for c in centromeres if 50 <= c.get('score', 0) < 70)
+            low_conf = sum(1 for c in centromeres if c.get('score', 0) < 50)
+            
+            print(f"  Confidence levels:")
+            if high_conf > 0:
+                print(f"    High (score ≥70): {high_conf}")
+            if med_conf > 0:
+                print(f"    Medium (50-69): {med_conf}")
+            if low_conf > 0:
+                print(f"    Low (<50): {low_conf}")
+            
+            if cenpb_data:
+                cent_with_cenpb = sum(1 for c in centromeres if 'cenpb_count' in c and c['cenpb_count'] > 0)
+                if cent_with_cenpb > 0:
+                    avg_cenpb = np.mean([c['cenpb_density'] for c in centromeres if c.get('cenpb_count', 0) > 0])
+                    print(f"    With CENP-B boxes: {cent_with_cenpb}/{len(centromeres)} (avg density: {avg_cenpb:.3f}/kb)")
     
     # Write GFF file
     gff_file = f"{args.output_prefix}.gff3"
@@ -868,6 +1019,25 @@ def main():
         if centromeres:
             cent_length = sum(c['end'] - c['start'] for c in centromeres)
             f.write(f"{'centromere_candidates':20s}: {len(centromeres):5d} regions, {cent_length:12,d} bp total\n")
+            
+            # Add confidence breakdown
+            if any('score' in c for c in centromeres):
+                f.write("\n  Centromere Confidence:\n")
+                high = sum(1 for c in centromeres if c.get('score', 0) >= 70)
+                med = sum(1 for c in centromeres if 50 <= c.get('score', 0) < 70)
+                low = sum(1 for c in centromeres if c.get('score', 0) < 50)
+                
+                if high > 0:
+                    f.write(f"    High confidence: {high}\n")
+                if med > 0:
+                    f.write(f"    Medium confidence: {med}\n")
+                if low > 0:
+                    f.write(f"    Low confidence: {low}\n")
+                
+                # Average score
+                avg_score = np.mean([c.get('score', 0) for c in centromeres])
+                f.write(f"    Average score: {avg_score:.1f}/100\n")
+            
             total_length += cent_length
         
         f.write("-" * 30 + "\n")
