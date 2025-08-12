@@ -4,18 +4,31 @@ A high-performance tool for analyzing k-mer variability across genomes, designed
 
 ## Features
 
-- **Fast k-mer counting**: Efficient 2-bit encoding for k-mers up to 31bp
-- **Parallel processing**: Multi-threaded chromosome processing with configurable thread count
-- **Sliding window analysis**: Configurable window size and step for fine-grained analysis
-- **Canonical k-mers**: Automatically handles reverse complements
-- **Satellite DNA detection**: Automatic identification of low k-mer variability regions
-- **Centromere prediction**: Find potential functional centromeres within satellite arrays
-- **CENP-B box detection**: Search for CENP-B box motifs using edit distance in centromeric regions
-- **Sequence extraction**: Export detected regions as FASTA sequences for further analysis
-- **Visualization**: Generate publication-quality plots for each chromosome
-- **Memory efficient**: Optimized for large genome analysis
-- **Thread control**: Specify number of threads or auto-detect based on CPU cores
-- **GFF integration**: Overlay satellite DNA annotations from Tandem Repeat Finder or other sources
+### Core Tools
+- **kmer_profiler**: Fast C++ tool for k-mer counting in sliding windows
+  - Efficient 2-bit encoding for k-mers up to 31bp
+  - Multi-threaded chromosome processing
+  - Canonical k-mer handling (forward/reverse complement)
+  
+- **cenpb_finder**: Specialized C++ tool for CENP-B box detection
+  - Edit distance search with Myers' algorithm
+  - IUPAC degenerate nucleotide support
+  - Both strand searching
+  - Unlimited thread scaling
+
+### Analysis Capabilities
+- **Satellite DNA detection**: Automatic identification of low k-mer diversity regions
+- **Centromere prediction**: Find functional centromeres within satellite arrays
+- **CENP-B box quantification**: Count and map CENP-B binding sites
+- **Sequence extraction**: Export detected regions as FASTA sequences
+- **TRF integration**: Classify repeats using Tandem Repeat Finder annotations
+
+### Visualization & Reporting
+- **Chromosome plots**: Individual plots for each chromosome
+- **Karyotype view**: All chromosomes with consistent scaling
+- **Grouped plots**: Size-based grouping for better visibility
+- **HTML reports**: Complete analysis summary with all results
+- **GFF annotations**: Standard format for genome browsers
 
 ## Installation
 
@@ -29,10 +42,10 @@ A high-performance tool for analyzing k-mer variability across genomes, designed
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/varprofiler.git
+git clone https://github.com/aglabx/varprofiler.git
 cd varprofiler
 
-# Compile the C++ k-mer profiler
+# Compile the C++ tools (kmer_profiler and cenpb_finder)
 make
 
 # Install Python dependencies
@@ -247,26 +260,60 @@ The tool outputs a standard BED file with the following columns:
 
 ## CENP-B Box Detection
 
-VarProfiler includes a specialized tool for detecting CENP-B boxes - conserved 17bp sequences found in centromeric regions. The canonical human CENP-B box is `YTTCGTTGGAARCGGGA`, but it varies across species.
+VarProfiler includes a specialized tool `cenpb_finder` for detecting CENP-B boxes - conserved ~17bp sequences found in centromeric regions. The canonical human CENP-B box is `YTTCGTTGGAARCGGGA`, but it varies across species.
 
-### Usage
+### Step 2b: Search for CENP-B boxes (optional)
+
 ```bash
-# Direct usage of cenpb_finder
-./cenpb_finder genome.fa regions.bed output.tsv -p YTTCGTTGGAARCGGGA -d 3 -t 4
+./cenpb_finder <genome.fasta> <regions.bed> <output.tsv> [options]
+```
 
-# Integrated with satellite detection
+**Parameters:**
+- `genome.fasta`: Input genome in FASTA format
+- `regions.bed`: BED file with regions to search (e.g., from detect_satellites.py)
+- `output.tsv`: Output file with CENP-B box counts and positions
+- `-p PATTERN`: CENP-B box pattern with IUPAC codes (default: YTTCGTTGGAARCGGGA)
+- `-d DISTANCE`: Maximum edit distance (default: 3)
+- `-t THREADS`: Number of threads (default: 1, no upper limit)
+- `-s`: Search forward strand only (default: both strands)
+- `-v`: Verbose output
+
+**Examples:**
+```bash
+# Direct usage - search in low k-mer diversity regions
+./cenpb_finder genome.fa low_kmer_regions.bed cenpb_boxes.tsv -d 3 -t 192
+
+# Custom pattern for different species
+./cenpb_finder mouse.fa satellites.bed mouse_cenpb.tsv -p YTTCGTTGGAWRCGGGA -d 4
+
+# Integrated with satellite detection (automatic)
 python detect_satellites.py kmer_counts.bed -k 23 -g genome.fa --find-centromeres \
-  --cenpb-pattern YTTCGTTGGAARCGGGA --cenpb-distance 3
+  --cenpb-pattern YTTCGTTGGAARCGGGA --cenpb-distance 3 --cenpb-threads 8
+```
+
+**Output format (TSV):**
+```
+#chrom  start    end      kmer_count  cenpb_count  cenpb_density  cenpb_positions
+chr1    5000000  5100000  1234        15           0.15           5001234,5002345,5003456,...
+chr1    5200000  5300000  1456        23           0.23           5201234,5202345,...
 ```
 
 ### Features
-- **Edit distance search**: Finds approximate matches allowing insertions, deletions, and substitutions
-- **IUPAC support**: Handles degenerate nucleotide codes in the pattern
+- **Edit distance search**: Uses Myers' bit-parallel algorithm for efficient approximate matching
+- **IUPAC support**: Handles degenerate nucleotide codes (Y=C/T, R=A/G, W=A/T, etc.)
 - **Both strand search**: Searches forward and reverse complement
-- **Parallel processing**: Multi-threaded for large datasets
+- **Parallel processing**: Multi-threaded with no artificial thread limit
+- **Memory efficient**: Processes regions in parallel without loading entire genome
 - **Integration**: Automatically runs on low k-mer diversity regions when detecting centromeres
 
-The CENP-B box count and density are included in the GFF annotations and help confirm functional centromeres, as these sequences are binding sites for CENP-B protein.
+### Biological significance
+CENP-B boxes are binding sites for CENP-B protein, which:
+- Helps establish and maintain centromeric chromatin
+- Is found in most human centromeres (except Y chromosome)
+- Shows conservation across primates and mammals
+- High density indicates functional centromeric regions
+
+The CENP-B box count and density are included in the GFF annotations and help confirm functional centromeres.
 
 ## Algorithm
 
