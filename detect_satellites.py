@@ -222,11 +222,36 @@ def run_cenpb_finder(bed_file, genome_file, output_file, pattern="YTTCGTTGGAARCG
     """
     import subprocess
     from pathlib import Path
+    import os
     
-    # Check if cenpb_finder exists
-    cenpb_finder = Path('./cenpb_finder')
-    if not cenpb_finder.exists():
-        print("Warning: cenpb_finder not found. Skipping CENP-B box analysis.")
+    # Look for cenpb_finder in multiple locations
+    script_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+    possible_paths = [
+        script_dir / 'cenpb_finder',  # Same directory as this script
+        Path('./cenpb_finder'),        # Current working directory
+        Path('cenpb_finder'),          # In PATH
+    ]
+    
+    cenpb_finder = None
+    for path in possible_paths:
+        if path.exists() and os.access(path, os.X_OK):
+            cenpb_finder = path
+            break
+    
+    # Also check if it's in PATH
+    if not cenpb_finder:
+        from shutil import which
+        in_path = which('cenpb_finder')
+        if in_path:
+            cenpb_finder = Path(in_path)
+    
+    if not cenpb_finder:
+        print(f"Warning: cenpb_finder not found. Searched in:")
+        print(f"  - {script_dir}")
+        print(f"  - Current directory")
+        print(f"  - System PATH")
+        print("Please compile it with 'make cenpb_finder' in the VarProfiler directory.")
+        print("Skipping CENP-B box analysis.")
         return {}
     
     # Build command
