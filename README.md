@@ -18,8 +18,13 @@ A high-performance tool for analyzing k-mer variability across genomes, designed
 
 ### Analysis Capabilities
 - **Satellite DNA detection**: Automatic identification of low k-mer diversity regions
-- **Centromere prediction**: Find functional centromeres within satellite arrays
-- **CENP-B box quantification**: Count and map CENP-B binding sites
+- **Advanced centromere prediction**: Multi-signal scoring system combining:
+  - CENP-B box density (primary signal, 40% weight)
+  - K-mer diversity minima (30% weight)
+  - Satellite array size context (20% weight)
+  - Local minimum detection (10% weight)
+- **CENP-B box quantification**: Count and map CENP-B binding sites with biological calibration
+- **Confidence scoring**: High/Medium/Low confidence levels for centromere predictions
 - **Sequence extraction**: Export detected regions as FASTA sequences
 - **TRF integration**: Classify repeats using Tandem Repeat Finder annotations
 
@@ -258,9 +263,39 @@ The tool outputs a standard BED file with the following columns:
 - Chromosome sizes shown in titles for easy reference
 - Saved as separate files: `grouped_Large_gt150_Mb_kmer_distribution.png`, `grouped_Dot_chromosomes_lt10_Mb_kmer_distribution.png`, etc.
 
+## Centromere Detection Strategy
+
+VarProfiler uses a sophisticated multi-signal approach for centromere identification, moving beyond simple k-mer minima to a biologically-informed scoring system.
+
+### Scoring System (0-100 scale)
+
+1. **CENP-B Box Density (40% weight)** - Primary signal
+   - >2.5 boxes/kb: Maximum score (alpha-satellite rich)
+   - 1-2.5 boxes/kb: Moderate score (typical arrays)
+   - <1 box/kb: Low score (degenerate/poor arrays)
+   - Expected: ~3 boxes/kb in human alpha-satellites
+
+2. **K-mer Diversity (30% weight)** - Conservation signal
+   - <2%: Maximum score (highly conserved)
+   - 2-10%: Moderate score
+   - >10%: Low score
+
+3. **Satellite Array Size (20% weight)** - Context signal
+   - >5 Mb: Maximum score (large arrays)
+   - 1-5 Mb: Moderate score
+   - <1 Mb: Low score
+
+4. **Local Minimum (10% weight)** - Additional confidence
+   - Bonus if window is local k-mer minimum within array
+
+### Confidence Levels
+- **High (≥70)**: Red - Strong centromeric signature
+- **Medium (50-69)**: Orange - Probable centromere
+- **Low (<50)**: Yellow - Possible centromere
+
 ## CENP-B Box Detection
 
-VarProfiler includes a specialized tool `cenpb_finder` for detecting CENP-B boxes - conserved ~17bp sequences found in centromeric regions. The canonical human CENP-B box is `YTTCGTTGGAARCGGGA`, but it varies across species.
+The `cenpb_finder` tool searches for CENP-B boxes - conserved ~17bp sequences that mark functional centromeres. The canonical human CENP-B box is `YTTCGTTGGAARCGGGA`.
 
 ### Step 2b: Search for CENP-B boxes (optional)
 

@@ -210,8 +210,9 @@ __marimo__/
 manuscript.md
 supplementary.md
 
-# Compiled C++ binary
+# Compiled C++ binaries
 kmer_profiler
+cenpb_finder
 
 # IDE specific
 .vscode/
