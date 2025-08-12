@@ -114,6 +114,7 @@ python plot_chromosomes.py <input.bed> -k <kmer_size> [-o output_dir] [-g gff_fi
 - `-k, --kmer-size`: **Required** - K-mer size used in analysis (must match kmer_profiler)
 - `-o, --output_dir`: Directory to save plots (default: kmer_plots)
 - `-g, --gff`: Optional GFF file with satellite DNA annotations
+- `-c, --centromere-gff`: Optional GFF file with centromere annotations (e.g., from detect_satellites.py)
 
 **Examples:**
 ```bash
@@ -122,6 +123,12 @@ python plot_chromosomes.py kmer_counts.bed -k 23 -o chromosome_plots
 
 # With satellite DNA annotations overlay (k=31 was used)
 python plot_chromosomes.py kmer_counts.bed -k 31 -o chromosome_plots -g satellites.gff
+
+# With centromere regions from detect_satellites.py
+python plot_chromosomes.py kmer_counts.bed -k 23 -o chromosome_plots -c satellites.gff3
+
+# Combined: both TRF satellites and detected centromeres
+python plot_chromosomes.py kmer_counts.bed -k 23 -o chromosome_plots -g trf_satellites.gff -c detected_regions.gff3
 
 # For diploid genomes with maternal/paternal chromosomes
 # Input BED file should contain chromosomes named like: chr1_mat, chr1_pat, chr2_maternal, chr2_paternal, etc.
@@ -145,6 +152,7 @@ The tool outputs a standard BED file with the following columns:
 - Y-axis: Percentage of unique k-mers in window (0-110%)
 - Fixed Y-axis scale for easy comparison across chromosomes
 - Orange shading: Satellite DNA regions from GFF annotations (when provided)
+- Red shading: Centromere-containing regions (when provided via -c)
 - Cyan line/area: K-mer variability profile
 - Title includes k-mer size for clarity
 

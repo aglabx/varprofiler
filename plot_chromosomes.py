@@ -6,20 +6,22 @@ import argparse
 import os
 import sys
 
-def read_gff_satellites(gff_file_path):
+def read_gff_annotations(gff_file_path, feature_type='satellite'):
     """
-    Read satellite DNA annotations from GFF file.
+    Read annotations from GFF file.
     
     Args:
-        gff_file_path (str): Path to GFF file with satellite annotations.
+        gff_file_path (str): Path to GFF file with annotations.
+        feature_type (str): Type of features to extract ('satellite', 'centromere', or 'both')
     
     Returns:
-        dict: Dictionary with chromosome names as keys and list of (start, end) tuples as values.
+        dict: Dictionary with 'satellites' and/or 'centromeres' keys, each containing
+              a dict with chromosome names as keys and list of (start, end, attributes) tuples.
     """
-    satellites = {}
+    annotations = {'satellites': {}, 'centromeres': {}}
     
     if not gff_file_path or not os.path.exists(gff_file_path):
-        return satellites
+        return annotations
     
     try:
         with open(gff_file_path, 'r') as f:
@@ -28,31 +30,55 @@ def read_gff_satellites(gff_file_path):
                     continue
                     
                 parts = line.strip().split('\t')
-                if len(parts) < 5:
+                if len(parts) < 9:
                     continue
                     
                 chrom = parts[0]
+                feat_type = parts[2]
                 start = int(parts[3]) - 1  # Convert to 0-based
                 end = int(parts[4])
+                attributes = parts[8] if len(parts) > 8 else ''
                 
-                # Only include satellites longer than 10kb
-                if end - start > 10000:
-                    if chrom not in satellites:
-                        satellites[chrom] = []
-                    satellites[chrom].append((start, end))
+                # Parse attributes
+                attr_dict = {}
+                for attr in attributes.split(';'):
+                    if '=' in attr:
+                        key, value = attr.split('=', 1)
+                        attr_dict[key] = value
+                
+                # Check if this is a centromere region
+                if 'centromere' in feat_type.lower() or 'centromere_containing_region' in feat_type:
+                    if feature_type in ['centromere', 'both']:
+                        if chrom not in annotations['centromeres']:
+                            annotations['centromeres'][chrom] = []
+                        annotations['centromeres'][chrom].append((start, end, attr_dict))
+                
+                # Check if this is a satellite/low complexity region
+                elif any(term in feat_type.lower() for term in ['satellite', 'tandem', 'low_kmer', 'complex']):
+                    # Only include regions longer than 10kb for satellites
+                    if end - start > 10000:
+                        if feature_type in ['satellite', 'both']:
+                            if chrom not in annotations['satellites']:
+                                annotations['satellites'][chrom] = []
+                            annotations['satellites'][chrom].append((start, end, attr_dict))
         
-        # Sort satellites by start position
-        for chrom in satellites:
-            satellites[chrom].sort(key=lambda x: x[0])
-            
-        print(f"Loaded satellite annotations for {len(satellites)} chromosomes")
+        # Sort by start position
+        for ann_type in annotations:
+            for chrom in annotations[ann_type]:
+                annotations[ann_type][chrom].sort(key=lambda x: x[0])
+        
+        # Print summary
+        if annotations['satellites']:
+            print(f"Loaded satellite annotations for {len(annotations['satellites'])} chromosomes")
+        if annotations['centromeres']:
+            print(f"Loaded centromere annotations for {len(annotations['centromeres'])} chromosomes")
         
     except Exception as e:
         print(f"Warning: Could not read GFF file: {e}", file=sys.stderr)
     
-    return satellites
+    return annotations
 
-def plot_kmer_distribution(bed_file_path, output_dir, gff_file_path, kmer_size):
+def plot_kmer_distribution(bed_file_path, output_dir, gff_file_path, kmer_size, centromere_gff_path=None):
     """
     Reads a BED file with k-mer counts and creates plots for each chromosome.
     
@@ -81,7 +107,22 @@ def plot_kmer_distribution(bed_file_path, output_dir, gff_file_path, kmer_size):
         os.makedirs(output_dir)
 
     # Load satellite annotations if provided
-    satellites = read_gff_satellites(gff_file_path) if gff_file_path else {}
+    satellites = {}
+    centromeres = {}
+    
+    if gff_file_path:
+        annotations = read_gff_annotations(gff_file_path, 'satellite')
+        satellites = annotations['satellites']
+    
+    # Load centromere annotations if provided separately
+    if centromere_gff_path:
+        cent_annotations = read_gff_annotations(centromere_gff_path, 'both')
+        if cent_annotations['centromeres']:
+            centromeres = cent_annotations['centromeres']
+        # Also merge satellites if present
+        for chrom in cent_annotations['satellites']:
+            if chrom not in satellites:
+                satellites[chrom] = cent_annotations['satellites'][chrom]
 
     # Get list of unique chromosomes from file
     chromosomes = df['chromosome'].unique()
@@ -108,11 +149,19 @@ def plot_kmer_distribution(bed_file_path, output_dir, gff_file_path, kmer_size):
 
         # Add satellite DNA annotations as background shading if available
         if chrom in satellites:
-            for start, end in satellites[chrom]:
+            for start, end, attrs in satellites[chrom]:
                 start_mb = start / 1_000_000
                 end_mb = end / 1_000_000
                 ax.axvspan(start_mb, end_mb, alpha=0.15, color='orange', 
                           label='Satellite DNA' if start == satellites[chrom][0][0] else "")
+        
+        # Add centromere annotations as vertical bands if available
+        if chrom in centromeres:
+            for start, end, attrs in centromeres[chrom]:
+                start_mb = start / 1_000_000
+                end_mb = end / 1_000_000
+                ax.axvspan(start_mb, end_mb, alpha=0.3, color='red', 
+                          label='Centromere region' if start == centromeres[chrom][0][0] else "")
 
         # Draw line and filled area beneath it
         ax.plot(chrom_df['position_mb'], chrom_df['kmer_percentage'], 
@@ -146,12 +195,12 @@ def plot_kmer_distribution(bed_file_path, output_dir, gff_file_path, kmer_size):
     print(f"\nDone! All plots saved in directory '{output_dir}'.")
     
     # Create karyotype-wide plot with all chromosomes
-    create_karyotype_plot(df, satellites, output_dir, kmer_size)
+    create_karyotype_plot(df, satellites, centromeres, output_dir, kmer_size)
     
     # Create grouped karyotype plot with size-based grouping
-    create_grouped_karyotype_plot(df, satellites, output_dir, kmer_size)
+    create_grouped_karyotype_plot(df, satellites, centromeres, output_dir, kmer_size)
 
-def create_karyotype_plot(df, satellites, output_dir, kmer_size):
+def create_karyotype_plot(df, satellites, centromeres, output_dir, kmer_size):
     """
     Create a single plot showing all chromosomes with consistent scale.
     1 Mb has the same width across all chromosomes.
@@ -275,10 +324,22 @@ def create_karyotype_plot(df, satellites, output_dir, kmer_size):
                 
                 # Add satellite annotations if available
                 if chrom in satellites:
-                    for start, end in satellites[chrom]:
+                    for item in satellites[chrom]:
+                        # Handle both old (start, end) and new (start, end, attrs) formats
+                        start = item[0]
+                        end = item[1]
                         start_mb = start / 1_000_000
                         end_mb = end / 1_000_000
                         ax.axvspan(start_mb, end_mb, alpha=0.15, color='orange')
+                
+                # Add centromere annotations if available
+                if chrom in centromeres:
+                    for item in centromeres[chrom]:
+                        start = item[0]
+                        end = item[1]
+                        start_mb = start / 1_000_000
+                        end_mb = end / 1_000_000
+                        ax.axvspan(start_mb, end_mb, alpha=0.3, color='red')
                 
                 # Plot k-mer percentage
                 ax.plot(chrom_df['position_mb'], chrom_df['kmer_percentage'], 
@@ -365,7 +426,7 @@ def create_karyotype_plot(df, satellites, output_dir, kmer_size):
     
     print(f"Karyotype plot saved as: {output_filename}")
 
-def create_grouped_karyotype_plot(df, satellites, output_dir, kmer_size):
+def create_grouped_karyotype_plot(df, satellites, centromeres, output_dir, kmer_size):
     """
     Create a multi-panel plot with chromosomes grouped by size.
     Each group has its own scale to ensure chromosomes fill at least 60% of the plot width.
@@ -464,10 +525,22 @@ def create_grouped_karyotype_plot(df, satellites, output_dir, kmer_size):
                 
                 # Add satellite annotations if available
                 if chrom in satellites:
-                    for start, end in satellites[chrom]:
+                    for item in satellites[chrom]:
+                        # Handle both old (start, end) and new (start, end, attrs) formats
+                        start = item[0]
+                        end = item[1]
                         start_mb = start / 1_000_000
                         end_mb = end / 1_000_000
                         ax.axvspan(start_mb, end_mb, alpha=0.15, color='orange')
+                
+                # Add centromere annotations if available
+                if chrom in centromeres:
+                    for item in centromeres[chrom]:
+                        start = item[0]
+                        end = item[1]
+                        start_mb = start / 1_000_000
+                        end_mb = end / 1_000_000
+                        ax.axvspan(start_mb, end_mb, alpha=0.3, color='red')
                 
                 # Plot k-mer percentage
                 ax.plot(chrom_df['position_mb'], chrom_df['kmer_percentage'], 
@@ -537,6 +610,10 @@ def main():
         help='Optional GFF file with satellite DNA annotations.'
     )
     parser.add_argument(
+        '-c', '--centromere-gff',
+        help='Optional GFF file with centromere annotations (e.g., from detect_satellites.py).'
+    )
+    parser.add_argument(
         '-k', '--kmer-size',
         type=int,
         required=True,
@@ -544,7 +621,7 @@ def main():
     )
     
     args = parser.parse_args()
-    plot_kmer_distribution(args.bed_file, args.output_dir, args.gff, args.kmer_size)
+    plot_kmer_distribution(args.bed_file, args.output_dir, args.gff, args.kmer_size, args.centromere_gff)
 
 if __name__ == '__main__':
     main()

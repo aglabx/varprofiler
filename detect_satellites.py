@@ -206,8 +206,11 @@ def get_size_category(length):
 
 def find_centromere_candidates(regions, df, kmer_size):
     """
-    Find potential centromeres as regions with minimal k-mer variability
-    within satellite arrays.
+    Find potential centromere-containing regions as windows with minimal k-mer diversity
+    within large satellite arrays.
+    
+    Note: We identify regions that likely CONTAIN centromeres, not precise centromere
+    boundaries. Resolution is limited by window size (typically 100kb).
     
     Args:
         regions: Dictionary of low variability regions per chromosome
@@ -215,12 +218,12 @@ def find_centromere_candidates(regions, df, kmer_size):
         kmer_size: K-mer size
     
     Returns:
-        List of potential centromere regions
+        List of windows that likely contain functional centromeres
     """
     centromeres = []
     
     for chrom, chrom_regions in regions.items():
-        # Only consider large satellites (potential pericentromeric regions)
+        # Search within large low-diversity regions (likely satellite arrays where centromeres reside)
         large_regions = [r for r in chrom_regions if r[1] - r[0] >= 100000]
         
         if not large_regions:
@@ -339,15 +342,15 @@ def write_gff(regions, centromeres, output_file, source='VarProfiler'):
             score = f"{cent['kmer_percentage']:.2f}"
             
             attributes = [
-                f"ID=centromere_candidate_{feature_id}",
-                f"Name=centromere_{chrom}_{start}_{end}",
+                f"ID=centromere_containing_region_{feature_id}",
+                f"Name=centromere_region_{chrom}_{start}_{end}",
                 f"kmer_percent={cent['kmer_percentage']:.2f}",
                 f"satellite_region={cent['satellite_start']+1}..{cent['satellite_end']}",
                 f"satellite_mean={cent['satellite_mean']:.2f}",
                 f"color=0,0,255"  # Blue for centromeres
             ]
             
-            f.write(f"{chrom}\t{source}\tcentromere\t{start}\t{end}\t"
+            f.write(f"{chrom}\t{source}\tcentromere_containing_region\t{start}\t{end}\t"
                    f"{score}\t.\t.\t{';'.join(attributes)}\n")
             
             feature_id += 1
