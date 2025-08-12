@@ -118,9 +118,16 @@ VarProfiler uses an efficient sliding window approach:
 
 If you use VarProfiler in your research, please cite:
 ```
+Marina Popova, Aleksey Komissarov (2025)
 VarProfiler: A tool for k-mer variability profiling across genomes
-[Your publication details here]
+bioRxiv (manuscript in preparation)
 ```
+
+## Authors
+
+- Marina Popova
+- Aleksey Komissarov
+- Claude (AI assistant) - Co-author for code implementation and documentation
 
 ## License
 
@@ -132,4 +139,6 @@ Contributions are welcome! Please feel free to submit pull requests or open issu
 
 ## Contact
 
-For questions and support, please open an issue on GitHub or contact [your email].
+For questions and support:
+- Email: Aleksey Komissarov <ad3002@gmail.com>
+- GitHub Issues: https://github.com/aglabx/varprofiler/issues

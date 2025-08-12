@@ -20,12 +20,12 @@ def read_long_description():
 setup(
     name='varprofiler',
     version='1.0.0',
-    author='Your Name',
-    author_email='your.email@example.com',
+    author='Marina Popova, Aleksey Komissarov',
+    author_email='ad3002@gmail.com',
     description='A high-performance tool for analyzing k-mer variability across genomes',
     long_description=read_long_description(),
     long_description_content_type='text/markdown',
-    url='https://github.com/yourusername/varprofiler',
+    url='https://github.com/aglabx/varprofiler',
     packages=find_packages(),
     py_modules=['plot_chromosomes'],
     install_requires=read_requirements(),
@@ -52,7 +52,7 @@ setup(
     ],
     keywords='bioinformatics genomics k-mer analysis variation profiling',
     project_urls={
-        'Bug Reports': 'https://github.com/yourusername/varprofiler/issues',
-        'Source': 'https://github.com/yourusername/varprofiler',
+        'Bug Reports': 'https://github.com/aglabx/varprofiler/issues',
+        'Source': 'https://github.com/aglabx/varprofiler',
     },
 )
