@@ -51,7 +51,7 @@ def read_gff_satellites(gff_file_path):
     
     return satellites
 
-def plot_kmer_distribution(bed_file_path, output_dir, gff_file_path=None):
+def plot_kmer_distribution(bed_file_path, output_dir, gff_file_path=None, kmer_size=23):
     """
     Reads a BED file with k-mer counts and creates plots for each chromosome.
     
@@ -59,6 +59,7 @@ def plot_kmer_distribution(bed_file_path, output_dir, gff_file_path=None):
         bed_file_path (str): Path to the input BED file.
         output_dir (str): Directory for saving plots.
         gff_file_path (str, optional): Path to GFF file with satellite DNA annotations.
+        kmer_size (int): Size of k-mers used in analysis (default: 23).
     """
     try:
         # Load data with column names for clarity
@@ -83,6 +84,13 @@ def plot_kmer_distribution(bed_file_path, output_dir, gff_file_path=None):
 
     # Get list of unique chromosomes from file
     chromosomes = df['chromosome'].unique()
+    
+    # Calculate window sizes for normalization
+    df['window_size'] = df['end'] - df['start']
+    
+    # Calculate maximum possible k-mers per window and normalize to percentage
+    df['max_kmers'] = df['window_size'] - kmer_size + 1
+    df['kmer_percentage'] = (df['kmer_count'] / df['max_kmers']) * 100
 
     for chrom in chromosomes:
         print(f"Creating plot for chromosome: {chrom}...")
@@ -106,30 +114,33 @@ def plot_kmer_distribution(bed_file_path, output_dir, gff_file_path=None):
                           label='Satellite DNA' if start == satellites[chrom][0][0] else "")
 
         # Draw line and filled area beneath it
-        ax.plot(chrom_df['position_mb'], chrom_df['kmer_count'], 
-                label=f'Unique k-mers', color='darkcyan', linewidth=1.5)
+        ax.plot(chrom_df['position_mb'], chrom_df['kmer_percentage'], 
+                label=f'Unique {kmer_size}-mers', color='darkcyan', linewidth=1.5)
         
-        ax.fill_between(chrom_df['position_mb'], chrom_df['kmer_count'], 
+        ax.fill_between(chrom_df['position_mb'], chrom_df['kmer_percentage'], 
                         alpha=0.2, color='darkcyan')
 
         # Configure plot appearance for better readability
-        ax.set_title(f'Distribution of unique k-mers across chromosome {chrom}', fontsize=18, fontweight='bold', pad=20)
+        ax.set_title(f'Distribution of unique {kmer_size}-mers across chromosome {chrom}', fontsize=18, fontweight='bold', pad=20)
         ax.set_xlabel('Genomic position (Mb)', fontsize=14, labelpad=15)
-        ax.set_ylabel('Number of unique k-mers', fontsize=14, labelpad=15)
+        ax.set_ylabel(f'Unique {kmer_size}-mers (% of window)', fontsize=14, labelpad=15)
         ax.tick_params(axis='both', which='major', labelsize=12)
         ax.grid(True, which='both', linestyle='--', linewidth=0.5)
         
         # Set axis limits for clean appearance
         ax.set_xlim(0, chrom_df['position_mb'].max())
-        ax.set_ylim(bottom=0) 
+        ax.set_ylim(0, 105)  # Fixed scale 0-105% to leave room for legend
         
-        # Format axis numbers for large values
+        # Format y-axis as percentage
         ax.get_yaxis().set_major_formatter(
-            plt.FuncFormatter(lambda x, p: format(int(x), ',')))
+            plt.FuncFormatter(lambda x, p: f'{x:.0f}%'))
         
-        # Add legend if we have satellite annotations
+        # Add legend at top of plot with no overlap
         if chrom in satellites and len(satellites[chrom]) > 0:
-            ax.legend(loc='upper right', fontsize=12, framealpha=0.9)
+            ax.legend(loc='upper left', fontsize=12, framealpha=0.9, bbox_to_anchor=(0.02, 0.98))
+        else:
+            # Even without satellites, show k-mer legend
+            ax.legend(loc='upper left', fontsize=12, framealpha=0.9, bbox_to_anchor=(0.02, 0.98))
 
         # Save plot to file
         output_filename = os.path.join(output_dir, f'{chrom}_kmer_distribution.png')
@@ -153,9 +164,15 @@ def main():
         '-g', '--gff',
         help='Optional GFF file with satellite DNA annotations.'
     )
+    parser.add_argument(
+        '-k', '--kmer-size',
+        type=int,
+        default=23,
+        help='K-mer size used in analysis (default: 23).'
+    )
     
     args = parser.parse_args()
-    plot_kmer_distribution(args.bed_file, args.output_dir, args.gff)
+    plot_kmer_distribution(args.bed_file, args.output_dir, args.gff, args.kmer_size)
 
 if __name__ == '__main__':
     main()
