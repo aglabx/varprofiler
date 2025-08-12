@@ -376,10 +376,22 @@ def create_karyotype_plot(df, satellites, centromeres, output_dir, kmer_size):
             
             # Add satellite annotations if available
             if chrom in satellites:
-                for start, end in satellites[chrom]:
+                for item in satellites[chrom]:
+                    # Handle both old (start, end) and new (start, end, attrs) formats
+                    start = item[0]
+                    end = item[1]
                     start_mb = start / 1_000_000
                     end_mb = end / 1_000_000
                     ax.axvspan(start_mb, end_mb, alpha=0.15, color='orange')
+            
+            # Add centromere annotations if available
+            if chrom in centromeres:
+                for item in centromeres[chrom]:
+                    start = item[0]
+                    end = item[1]
+                    start_mb = start / 1_000_000
+                    end_mb = end / 1_000_000
+                    ax.axvspan(start_mb, end_mb, alpha=0.3, color='red')
             
             # Plot k-mer percentage
             ax.plot(chrom_df['position_mb'], chrom_df['kmer_percentage'], 
