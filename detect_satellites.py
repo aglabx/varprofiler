@@ -295,15 +295,19 @@ def score_centromere_likelihood(window, kmer_percent, cenpb_density, array_size,
         weights['kmer'] = 0
     
     # 2. CENP-B box density score (40% weight) - most important
-    if cenpb_density > 0.3:  # High density
+    # Expected: ~3 boxes/kb for alpha-satellite rich regions
+    # Some arrays (Y chromosome, acrocentrics) have 0-1/kb
+    if cenpb_density > 2.5:  # Alpha-satellite rich (>2.5/kb)
         weights['cenpb'] = 40
-    elif cenpb_density > 0.2:
+    elif cenpb_density > 2.0:  # High density
         weights['cenpb'] = 35
-    elif cenpb_density > 0.1:
+    elif cenpb_density > 1.5:  # Good density
+        weights['cenpb'] = 30
+    elif cenpb_density > 1.0:  # Moderate (typical mixed arrays)
         weights['cenpb'] = 25
-    elif cenpb_density > 0.05:
+    elif cenpb_density > 0.5:  # Low but present
         weights['cenpb'] = 15
-    elif cenpb_density > 0:
+    elif cenpb_density > 0:  # Very low (degenerate)
         weights['cenpb'] = 5
     else:
         weights['cenpb'] = 0

@@ -464,7 +464,7 @@ void process_regions(const Config& config) {
     
     out.close();
     
-    // Print summary
+    // Print summary with detailed statistics
     std::cout << "\nResults written to: " << config.output_file << "\n";
     std::cout << "Summary:\n";
     std::cout << "  Total regions analyzed: " << results.size() << "\n";
@@ -473,8 +473,68 @@ void process_regions(const Config& config) {
     std::cout << "  Total CENP-B boxes found: " << total_cenpb_boxes << "\n";
     
     if (total_regions_with_cenpb > 0) {
-        std::cout << "  Average CENP-B boxes per positive region: " 
-                  << (double)total_cenpb_boxes / total_regions_with_cenpb << "\n";
+        // Calculate detailed statistics
+        size_t max_boxes = 0;
+        double max_density = 0;
+        std::string max_region;
+        std::vector<double> densities;
+        
+        for (const auto& region : results) {
+            if (region.cenpb_count > 0) {
+                double density = (double)region.cenpb_count / (region.end - region.start) * 1000;
+                densities.push_back(density);
+                
+                if ((size_t)region.cenpb_count > max_boxes) {
+                    max_boxes = region.cenpb_count;
+                    max_density = density;
+                    max_region = region.chrom + ":" + std::to_string(region.start) + 
+                                "-" + std::to_string(region.end);
+                }
+            }
+        }
+        
+        // Calculate statistics
+        double avg_boxes = (double)total_cenpb_boxes / total_regions_with_cenpb;
+        double avg_density = 0;
+        if (!densities.empty()) {
+            double sum = 0;
+            for (double d : densities) sum += d;
+            avg_density = sum / densities.size();
+        }
+        
+        std::cout << "\nCENP-B Box Statistics:\n";
+        std::cout << "  Average boxes per positive region: " << std::fixed << std::setprecision(2) 
+                  << avg_boxes << "\n";
+        std::cout << "  Maximum boxes in a region: " << max_boxes << " (in " << max_region << ")\n";
+        std::cout << "  Average density (positive regions): " << std::fixed << std::setprecision(3) 
+                  << avg_density << " boxes/kb\n";
+        std::cout << "  Maximum density: " << std::fixed << std::setprecision(3) 
+                  << max_density << " boxes/kb\n";
+        
+        // Classify by expected density ranges
+        size_t high_density = 0;    // >2.5 boxes/kb (alpha-satellite rich)
+        size_t medium_density = 0;  // 1-2.5 boxes/kb (typical)
+        size_t low_density = 0;     // <1 boxes/kb (degenerate/poor)
+        
+        for (double density : densities) {
+            if (density > 2.5) high_density++;
+            else if (density > 1.0) medium_density++;
+            else low_density++;
+        }
+        
+        std::cout << "\nDensity Distribution (expected ~3/kb for alpha-satellites):\n";
+        std::cout << "  High (>2.5/kb, alpha-sat rich): " << high_density << " regions\n";
+        std::cout << "  Medium (1-2.5/kb, typical): " << medium_density << " regions\n";
+        std::cout << "  Low (<1/kb, degenerate/poor): " << low_density << " regions\n";
+        
+        std::cout << "\nInterpretation:\n";
+        if (avg_density > 2.0) {
+            std::cout << "  Strong centromeric signature (consistent with alpha-satellite arrays)\n";
+        } else if (avg_density > 1.0) {
+            std::cout << "  Moderate centromeric signature (mixed or divergent arrays)\n";
+        } else {
+            std::cout << "  Weak centromeric signature (degenerate arrays or non-centromeric)\n";
+        }
     }
 }
 
