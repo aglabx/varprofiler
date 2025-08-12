@@ -82,6 +82,10 @@ python plot_chromosomes.py kmer_counts.bed -k 23 -o chromosome_plots
 
 # With satellite DNA annotations overlay (k=31 was used)
 python plot_chromosomes.py kmer_counts.bed -k 31 -o chromosome_plots -g satellites.gff
+
+# For diploid genomes with maternal/paternal chromosomes
+# Input BED file should contain chromosomes named like: chr1_mat, chr1_pat, chr2_maternal, chr2_paternal, etc.
+python plot_chromosomes.py diploid_kmers.bed -k 23 -o diploid_plots
 ```
 
 ## Output Format
@@ -95,14 +99,21 @@ The tool outputs a standard BED file with the following columns:
 
 ### Visualization
 - Generates one PNG file per chromosome
+- Additional karyotype-wide plot showing all chromosomes together
 - High-resolution plots (200 DPI) suitable for publication
 - X-axis: Genomic position in megabases (Mb)
-- Y-axis: Percentage of unique k-mers in window (0-100%)
-- Fixed Y-axis scale (0-105%) for easy comparison across chromosomes
+- Y-axis: Percentage of unique k-mers in window (0-110%)
+- Fixed Y-axis scale for easy comparison across chromosomes
 - Orange shading: Satellite DNA regions from GFF annotations (when provided)
 - Cyan line/area: K-mer variability profile
 - Title includes k-mer size for clarity
-- Legend positioned to avoid data overlap
+
+#### Karyotype Plot
+- Single image with all chromosomes arranged in grid (3 pairs per row for diploid genomes)
+- Consistent scale: 1 Mb has same width across all chromosomes
+- Natural chromosome sorting (1, 2, ..., 10, ..., 22, X, Y, MT)
+- **Diploid genome support**: For diploid assemblies, use `_mat` or `_maternal` suffix for maternal chromosomes and `_pat` or `_paternal` suffix for paternal chromosomes. These will be displayed side by side in the karyotype plot
+- Saved as `karyotype_kmer_distribution.png`
 
 ## Algorithm
 
