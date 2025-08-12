@@ -310,9 +310,20 @@ def write_gff(regions, centromeres, output_file, source='VarProfiler'):
                 f"Name=low_kmer_div_{chrom}_{start}_{end}",
                 f"length={region['length']}",
                 f"size_range={region['size_category']}",
-                f"mean_kmer_percent={region['mean_kmer_percentage']:.2f}",
-                f"color={color}"
+                f"mean_kmer_percent={region['mean_kmer_percentage']:.2f}"
             ]
+            
+            # Add TRF information if available
+            if 'dominant_period' in region and region['dominant_period']:
+                attributes.extend([
+                    f"trf_period={region['dominant_period']}",
+                    f"trf_gc={region['dominant_gc']:.2f}",
+                    f"trf_pmatch={region['dominant_pmatch']:.1f}",
+                    f"trf_coverage={region['trf_coverage']:.2f}",
+                    f"repeat_class={region['repeat_class']}"
+                ])
+            
+            attributes.append(f"color={color}")
             
             # Write GFF line
             f.write(f"{chrom}\t{source}\t{feature_type}\t{start}\t{end}\t"
@@ -357,6 +368,134 @@ def write_gff(regions, centromeres, output_file, source='VarProfiler'):
     
     if centromeres:
         print(f"    centromere_candidates: {len(centromeres)}")
+
+
+def read_trf_annotations(gff_file):
+    """
+    Read TRF (Tandem Repeat Finder) annotations from GFF file.
+    
+    Args:
+        gff_file: Path to GFF file with TRF annotations
+    
+    Returns:
+        Dictionary with chromosome as key and list of (start, end, period, gc, pmatch) tuples
+    """
+    trf_regions = defaultdict(list)
+    
+    if not gff_file or not os.path.exists(gff_file):
+        return trf_regions
+    
+    try:
+        with open(gff_file, 'r') as f:
+            for line in f:
+                if line.startswith('#'):
+                    continue
+                
+                parts = line.strip().split('\t')
+                if len(parts) < 9:
+                    continue
+                
+                chrom = parts[0]
+                start = int(parts[3]) - 1  # Convert to 0-based
+                end = int(parts[4])
+                attributes = parts[8]
+                
+                # Parse attributes
+                attr_dict = {}
+                for attr in attributes.split(';'):
+                    if '=' in attr:
+                        key, value = attr.split('=', 1)
+                        attr_dict[key] = value
+                
+                # Extract period, gc, pmatch
+                period = int(attr_dict.get('period', '0'))
+                gc = float(attr_dict.get('gc', '0'))
+                pmatch = float(attr_dict.get('pmatch', '0'))
+                
+                trf_regions[chrom].append({
+                    'start': start,
+                    'end': end,
+                    'period': period,
+                    'gc': gc,
+                    'pmatch': pmatch,
+                    'length': end - start
+                })
+        
+        # Sort by start position
+        for chrom in trf_regions:
+            trf_regions[chrom].sort(key=lambda x: x['start'])
+            
+        print(f"  Loaded TRF annotations for {len(trf_regions)} chromosomes")
+        total_regions = sum(len(v) for v in trf_regions.values())
+        print(f"  Total TRF regions: {total_regions}")
+        
+    except Exception as e:
+        print(f"  Warning: Could not read TRF annotations: {e}")
+    
+    return trf_regions
+
+
+def find_trf_overlaps(low_div_regions, trf_regions):
+    """
+    Find overlaps between low k-mer diversity regions and TRF annotations.
+    
+    Args:
+        low_div_regions: List of low k-mer diversity regions
+        trf_regions: Dictionary of TRF annotations by chromosome
+    
+    Returns:
+        Updated list of regions with TRF overlap information
+    """
+    for region in low_div_regions:
+        chrom = region['chrom']
+        region_start = region['start']
+        region_end = region['end']
+        
+        # Find overlapping TRF regions
+        overlaps = []
+        if chrom in trf_regions:
+            for trf in trf_regions[chrom]:
+                # Check for overlap
+                if trf['end'] > region_start and trf['start'] < region_end:
+                    overlap_start = max(region_start, trf['start'])
+                    overlap_end = min(region_end, trf['end'])
+                    overlap_length = overlap_end - overlap_start
+                    
+                    overlaps.append({
+                        'period': trf['period'],
+                        'gc': trf['gc'],
+                        'pmatch': trf['pmatch'],
+                        'overlap_length': overlap_length,
+                        'overlap_fraction': overlap_length / region['length']
+                    })
+        
+        # Add TRF information to region
+        if overlaps:
+            # Sort by overlap fraction
+            overlaps.sort(key=lambda x: x['overlap_fraction'], reverse=True)
+            
+            # Get dominant period (from largest overlap)
+            region['trf_overlaps'] = len(overlaps)
+            region['dominant_period'] = overlaps[0]['period']
+            region['dominant_gc'] = overlaps[0]['gc']
+            region['dominant_pmatch'] = overlaps[0]['pmatch']
+            region['trf_coverage'] = sum(o['overlap_length'] for o in overlaps) / region['length']
+            
+            # Classify based on period
+            period = overlaps[0]['period']
+            if period <= 6:
+                region['repeat_class'] = 'microsatellite'
+            elif period <= 100:
+                region['repeat_class'] = 'minisatellite'
+            else:
+                region['repeat_class'] = 'satellite'
+        else:
+            region['trf_overlaps'] = 0
+            region['dominant_period'] = None
+            region['repeat_class'] = 'unknown'
+            region['trf_coverage'] = 0.0
+    
+    return low_div_regions
 
 
 def read_fasta(filename):
@@ -498,6 +637,8 @@ def main():
     parser.add_argument('--find-centromeres',
                        action='store_true',
                        help='Attempt to identify centromere candidates')
+    parser.add_argument('-t', '--trf-annotations',
+                       help='GFF file with TRF annotations for repeat classification')
     
     args = parser.parse_args()
     
@@ -517,6 +658,30 @@ def main():
     
     # Organize regions with size information
     organized_regions = organize_regions_by_size(regions)
+    
+    # Load TRF annotations if provided
+    if args.trf_annotations:
+        print(f"\nLoading TRF annotations from {args.trf_annotations}...")
+        trf_regions = read_trf_annotations(args.trf_annotations)
+        
+        # Find overlaps with TRF annotations
+        print("Finding overlaps with TRF regions...")
+        organized_regions = find_trf_overlaps(organized_regions, trf_regions)
+        
+        # Print overlap statistics
+        with_trf = sum(1 for r in organized_regions if r['trf_overlaps'] > 0)
+        print(f"  {with_trf}/{len(organized_regions)} regions overlap with TRF annotations")
+        
+        # Print repeat class distribution
+        class_counts = defaultdict(int)
+        for r in organized_regions:
+            if 'repeat_class' in r:
+                class_counts[r['repeat_class']] += 1
+        
+        print("  Repeat class distribution:")
+        for cls in ['microsatellite', 'minisatellite', 'satellite', 'unknown']:
+            if cls in class_counts:
+                print(f"    {cls}: {class_counts[cls]}")
     
     # Find centromere candidates if requested
     centromeres = []
@@ -573,6 +738,41 @@ def main():
         
         f.write("-" * 30 + "\n")
         f.write(f"{'Total':15s}: {len(organized_regions):5d} regions, {total_length:12,d} bp total\n")
+        
+        # TRF overlap statistics if available
+        if args.trf_annotations:
+            f.write("\n\nTRF Annotation Overlap:\n")
+            f.write("-" * 30 + "\n")
+            
+            with_trf = [r for r in organized_regions if r.get('trf_overlaps', 0) > 0]
+            f.write(f"Regions with TRF overlap: {len(with_trf)} / {len(organized_regions)}\n")
+            
+            if with_trf:
+                avg_coverage = np.mean([r['trf_coverage'] for r in with_trf])
+                f.write(f"Average TRF coverage: {avg_coverage:.2%}\n\n")
+                
+                f.write("Repeat Classification (based on TRF period):\n")
+                class_stats = defaultdict(lambda: {'count': 0, 'total_length': 0})
+                for r in organized_regions:
+                    if 'repeat_class' in r:
+                        class_stats[r['repeat_class']]['count'] += 1
+                        class_stats[r['repeat_class']]['total_length'] += r['length']
+                
+                for cls in ['microsatellite', 'minisatellite', 'satellite', 'unknown']:
+                    if cls in class_stats:
+                        stats = class_stats[cls]
+                        f.write(f"  {cls:15s}: {stats['count']:5d} regions, {stats['total_length']:12,d} bp\n")
+                
+                # Period distribution
+                f.write("\nPeriod Distribution (top 10):\n")
+                period_counts = defaultdict(int)
+                for r in organized_regions:
+                    if r.get('dominant_period'):
+                        period_counts[r['dominant_period']] += 1
+                
+                sorted_periods = sorted(period_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+                for period, count in sorted_periods:
+                    f.write(f"  Period {period:6d}: {count:5d} regions\n")
         
         # Per-chromosome statistics
         f.write("\n\nPer-Chromosome Statistics:\n")

@@ -79,6 +79,7 @@ python detect_satellites.py <input.bed> -k <kmer_size> [-o output_prefix] [-g ge
 - `-p, --percentile`: Percentile threshold for low variability (default: 5)
 - `-m, --min-length`: Minimum region length in bp (default: 10000)
 - `-g, --genome`: Genome FASTA file for sequence extraction
+- `-t, --trf-annotations`: GFF file with TRF annotations for repeat classification
 - `--global-threshold`: Use global threshold instead of per-chromosome
 - `--find-centromeres`: Attempt to identify centromere candidates
 
@@ -94,6 +95,12 @@ python detect_satellites.py kmer_counts.bed -k 23 -o human_satellites
 
 # With sequence extraction and centromere detection
 python detect_satellites.py kmer_counts.bed -k 23 -o human_satellites -g genome.fa --find-centromeres
+
+# With TRF annotations for repeat classification
+python detect_satellites.py kmer_counts.bed -k 23 -o human_satellites -t trf_annotations.gff
+
+# Full analysis with all features
+python detect_satellites.py kmer_counts.bed -k 23 -o human_satellites -g genome.fa -t trf_annotations.gff --find-centromeres
 ```
 
 ### Step 3: Visualize results
