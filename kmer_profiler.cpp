@@ -86,41 +86,25 @@ std::vector<BedResult> process_chromosome_sliding(const std::string& chrom_name,
     }
     results.push_back({chrom_name, 0, (size_t)window_size, kmer_counts.size()});
 
-    // --- Slide through the rest of the chromosome ---
+    // --- Process remaining windows ---
     for (size_t start = static_cast<size_t>(step_size); start + static_cast<size_t>(window_size) <= seq.length(); start += static_cast<size_t>(step_size)) {
         size_t end = start + static_cast<size_t>(window_size);
         
-        // "Subtract" k-mers from the exited segment (left)
-        for (size_t i = start - static_cast<size_t>(step_size); i < start; ++i) {
+        // Clear and recalculate k-mers for this window
+        // This is simpler and avoids accumulation errors
+        kmer_counts.clear();
+        
+        for (size_t i = start; i < end - static_cast<size_t>(k_mer_length) + 1; ++i) {
             if (i + static_cast<size_t>(k_mer_length) > seq.length()) break;
-            std::string old_kmer_str = seq.substr(i, k_mer_length);
-            if (old_kmer_str.find('N') != std::string::npos || old_kmer_str.find('n') != std::string::npos) continue;
+            std::string kmer_str = seq.substr(i, k_mer_length);
+            if (kmer_str.find('N') != std::string::npos || kmer_str.find('n') != std::string::npos) continue;
             
-            uint64_t old_kmer = 0;
-            for(char c : old_kmer_str) old_kmer = (old_kmer << 2) | nucl_to_2bit(c);
-            old_kmer &= K_MER_MASK;
-
-            uint64_t rc_kmer = reverse_complement_2bit(old_kmer, k_mer_length);
-            uint64_t canonical_kmer = std::min(old_kmer, rc_kmer);
+            uint64_t current_kmer = 0;
+            for(char c : kmer_str) current_kmer = (current_kmer << 2) | nucl_to_2bit(c);
+            current_kmer &= K_MER_MASK;
             
-            kmer_counts[canonical_kmer]--;
-            if (kmer_counts[canonical_kmer] == 0) {
-                kmer_counts.erase(canonical_kmer);
-            }
-        }
-
-        // "Add" k-mers from the new segment (right)
-        for (size_t i = end - static_cast<size_t>(step_size); i < end - static_cast<size_t>(k_mer_length) + 1; ++i) {
-             if (i + static_cast<size_t>(k_mer_length) > seq.length()) break;
-             std::string new_kmer_str = seq.substr(i, k_mer_length);
-             if (new_kmer_str.find('N') != std::string::npos || new_kmer_str.find('n') != std::string::npos) continue;
-
-             uint64_t new_kmer = 0;
-             for(char c : new_kmer_str) new_kmer = (new_kmer << 2) | nucl_to_2bit(c);
-             new_kmer &= K_MER_MASK;
-
-             uint64_t rc_kmer = reverse_complement_2bit(new_kmer, k_mer_length);
-             kmer_counts[std::min(new_kmer, rc_kmer)]++;
+            uint64_t rc_kmer = reverse_complement_2bit(current_kmer, k_mer_length);
+            kmer_counts[std::min(current_kmer, rc_kmer)]++;
         }
         
         results.push_back({chrom_name, start, end, kmer_counts.size()});
