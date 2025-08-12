@@ -412,27 +412,35 @@ def create_grouped_karyotype_plot(df, satellites, output_dir, kmer_size):
         # Remove empty groups
         grouped_chroms = {k: v for k, v in grouped_chroms.items() if v}
         
-        # Create figure with subplots for each group
-        n_groups = len(grouped_chroms)
-        fig = plt.figure(figsize=(24, 5 * n_groups))
-        
+        # Create separate figure for each group for better layout control
         for group_idx, (group_name, chroms) in enumerate(grouped_chroms.items()):
             if not chroms:
                 continue
                 
             # Calculate number of rows and columns for this group
             n_chroms = len(chroms)
-            n_cols = min(4, n_chroms)  # Max 4 chromosomes per row
+            n_cols = min(6, n_chroms)  # Max 6 chromosomes per row
             n_rows = (n_chroms + n_cols - 1) // n_cols
+            
+            # Create figure for this group
+            fig, axes = plt.subplots(n_rows, n_cols, figsize=(24, 4 * n_rows))
+            
+            # Ensure axes is always 2D array
+            if n_rows == 1 and n_cols == 1:
+                axes = np.array([[axes]])
+            elif n_rows == 1:
+                axes = axes.reshape(1, -1)
+            elif n_cols == 1:
+                axes = axes.reshape(-1, 1)
             
             # Calculate the maximum size in this group for scaling
             group_max_size = max(size for _, size in chroms)
             
-            # Create subplot for this group
+            # Plot each chromosome in this group
             for idx, (chrom, size) in enumerate(chroms):
-                # Calculate subplot position
-                subplot_idx = group_idx * 100 + (n_rows * 10) + (n_cols) + idx + 1
-                ax = plt.subplot(n_groups, max(4, n_cols), group_idx * max(4, n_cols) + idx + 1)
+                row = idx // n_cols
+                col = idx % n_cols
+                ax = axes[row, col]
                 
                 chrom_df = df[df['chromosome'] == chrom].copy()
                 
@@ -461,7 +469,7 @@ def create_grouped_karyotype_plot(df, satellites, output_dir, kmer_size):
                 # Format axes
                 ax.set_title(f'{chrom} ({size:.1f} Mb)', fontsize=10, fontweight='bold')
                 ax.set_xlabel('Mb', fontsize=8)
-                if idx == 0:
+                if col == 0:
                     ax.set_ylabel('% unique', fontsize=8)
                 ax.tick_params(axis='both', which='major', labelsize=7)
                 ax.grid(True, alpha=0.3, linewidth=0.5)
@@ -469,24 +477,26 @@ def create_grouped_karyotype_plot(df, satellites, output_dir, kmer_size):
                 # Format y-axis as percentage
                 ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.0f}%'))
             
+            # Hide empty subplots
+            for idx in range(len(chroms), n_rows * n_cols):
+                row = idx // n_cols
+                col = idx % n_cols
+                axes[row, col].axis('off')
+            
             # Add group title
-            plt.text(0.02, 0.98 - group_idx * (1.0 / n_groups), group_name, 
-                    transform=fig.transFigure, fontsize=12, fontweight='bold',
-                    verticalalignment='top')
-        
-        # Main title
-        fig.suptitle(f'Size-grouped distribution of unique {kmer_size}-mers', 
-                    fontsize=16, fontweight='bold', y=1.02)
-        
-        # Adjust layout
-        plt.tight_layout()
-        
-        # Save grouped plot
-        output_filename = os.path.join(output_dir, 'grouped_karyotype_kmer_distribution.png')
-        plt.savefig(output_filename, dpi=200, bbox_inches='tight')
-        plt.close(fig)
-        
-        print(f"Grouped karyotype plot saved as: {output_filename}")
+            fig.suptitle(f'{group_name} - {kmer_size}-mer distribution', 
+                        fontsize=14, fontweight='bold')
+            
+            # Adjust layout
+            plt.tight_layout()
+            
+            # Save grouped plot
+            safe_group_name = group_name.replace('>', 'gt').replace('<', 'lt').replace(' ', '_').replace('(', '').replace(')', '')
+            output_filename = os.path.join(output_dir, f'grouped_{safe_group_name}_kmer_distribution.png')
+            plt.savefig(output_filename, dpi=200, bbox_inches='tight')
+            plt.close(fig)
+            
+            print(f"  Saved {group_name}: {output_filename}")
         
         # Print grouping statistics
         print("\nChromosome grouping statistics:")

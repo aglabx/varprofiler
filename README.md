@@ -117,15 +117,16 @@ The tool outputs a standard BED file with the following columns:
 - **Diploid genome support**: For diploid assemblies, use `_mat` or `_maternal` suffix for maternal chromosomes and `_pat` or `_paternal` suffix for paternal chromosomes. These will be displayed side by side in the karyotype plot
 - Saved as `karyotype_kmer_distribution.png`
 
-**Grouped Karyotype Plot** 
+**Grouped Karyotype Plots** 
 - Chromosomes grouped by size for better visibility of smaller chromosomes
-- Each size group has its own scale to ensure chromosomes fill at least 60% of plot width
+- Each size group saved as separate file with its own scale
+- Chromosomes fill at least 60% of plot width in each group
 - Automatic grouping based on genome size:
   - Large genomes: >150 Mb, 100-150 Mb, 50-100 Mb, <50 Mb
   - Medium genomes: >100 Mb, 50-100 Mb, 25-50 Mb, <25 Mb  
   - Small genomes: >50 Mb, 25-50 Mb, 10-25 Mb, <10 Mb
-- Chromosome sizes shown in titles
-- Saved as `grouped_karyotype_kmer_distribution.png`
+- Chromosome sizes shown in titles for easy reference
+- Saved as separate files: `grouped_Large_gt150_Mb_kmer_distribution.png`, etc.
 
 ## Algorithm
 
