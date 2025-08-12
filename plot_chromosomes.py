@@ -400,16 +400,16 @@ def create_grouped_karyotype_plot(df, satellites, output_dir, kmer_size):
     sizes = [size for _, size in sorted_chroms]
     
     if len(sizes) > 0:
-        # Define grouping thresholds
+        # Define grouping thresholds - always include dot chromosomes as separate group
         if max(sizes) > 200:  # Large genomes
-            thresholds = [150, 100, 50, 0]
-            group_names = ['Large (>150 Mb)', 'Medium (100-150 Mb)', 'Small (50-100 Mb)', 'Tiny (<50 Mb)']
-        elif max(sizes) > 100:  # Medium genomes
-            thresholds = [100, 50, 25, 0]
-            group_names = ['Large (>100 Mb)', 'Medium (50-100 Mb)', 'Small (25-50 Mb)', 'Tiny (<25 Mb)']
+            thresholds = [150, 100, 50, 10, 0]
+            group_names = ['Large (>150 Mb)', 'Medium (100-150 Mb)', 'Small (50-100 Mb)', 'Tiny (10-50 Mb)', 'Dot chromosomes (<10 Mb)']
+        elif max(sizes) > 100:  # Medium genomes  
+            thresholds = [100, 50, 25, 10, 0]
+            group_names = ['Large (>100 Mb)', 'Medium (50-100 Mb)', 'Small (25-50 Mb)', 'Tiny (10-25 Mb)', 'Dot chromosomes (<10 Mb)']
         else:  # Small genomes
-            thresholds = [50, 25, 10, 0]
-            group_names = ['Large (>50 Mb)', 'Medium (25-50 Mb)', 'Small (10-25 Mb)', 'Tiny (<10 Mb)']
+            thresholds = [50, 25, 10, 5, 0]
+            group_names = ['Large (>50 Mb)', 'Medium (25-50 Mb)', 'Small (10-25 Mb)', 'Tiny (5-10 Mb)', 'Dot chromosomes (<5 Mb)']
         
         # Assign chromosomes to groups
         grouped_chroms = {name: [] for name in group_names}
@@ -429,7 +429,11 @@ def create_grouped_karyotype_plot(df, satellites, output_dir, kmer_size):
                 
             # Calculate number of rows and columns for this group
             n_chroms = len(chroms)
-            n_cols = min(6, n_chroms)  # Max 6 chromosomes per row
+            # More columns for dot chromosomes since they're very small
+            if 'Dot' in group_name or '<10 Mb' in group_name or '<5 Mb' in group_name:
+                n_cols = min(8, n_chroms)  # Max 8 dot chromosomes per row
+            else:
+                n_cols = min(6, n_chroms)  # Max 6 regular chromosomes per row
             n_rows = (n_chroms + n_cols - 1) // n_cols
             
             # Create figure for this group

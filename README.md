@@ -125,11 +125,12 @@ The tool outputs a standard BED file with the following columns:
 - Each size group saved as separate file with its own scale
 - Chromosomes fill at least 60% of plot width in each group
 - Automatic grouping based on genome size:
-  - Large genomes: >150 Mb, 100-150 Mb, 50-100 Mb, <50 Mb
-  - Medium genomes: >100 Mb, 50-100 Mb, 25-50 Mb, <25 Mb  
-  - Small genomes: >50 Mb, 25-50 Mb, 10-25 Mb, <10 Mb
+  - Large genomes: >150 Mb, 100-150 Mb, 50-100 Mb, 10-50 Mb, Dot chromosomes (<10 Mb)
+  - Medium genomes: >100 Mb, 50-100 Mb, 25-50 Mb, 10-25 Mb, Dot chromosomes (<10 Mb)  
+  - Small genomes: >50 Mb, 25-50 Mb, 10-25 Mb, 5-10 Mb, Dot chromosomes (<5 Mb)
+- Dot chromosomes displayed with up to 8 per row for better space utilization
 - Chromosome sizes shown in titles for easy reference
-- Saved as separate files: `grouped_Large_gt150_Mb_kmer_distribution.png`, etc.
+- Saved as separate files: `grouped_Large_gt150_Mb_kmer_distribution.png`, `grouped_Dot_chromosomes_lt10_Mb_kmer_distribution.png`, etc.
 
 ## Algorithm
 
