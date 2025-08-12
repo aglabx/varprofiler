@@ -9,6 +9,8 @@
 #include <map>
 #include <mutex>
 #include <future>
+#include <queue>
+#include <condition_variable>
 
 // Structure for storing the result of one window
 struct BedResult {
@@ -130,9 +132,10 @@ std::vector<BedResult> process_chromosome_sliding(const std::string& chrom_name,
 
 
 int main(int argc, char* argv[]) {
-    if (argc != 6) {
-        std::cerr << "Usage: " << argv[0] << " <input.fasta> <output.bed> <kmer_len> <window_size> <step_size>" << std::endl;
+    if (argc != 6 && argc != 7) {
+        std::cerr << "Usage: " << argv[0] << " <input.fasta> <output.bed> <kmer_len> <window_size> <step_size> [threads]" << std::endl;
         std::cerr << "Example: " << argv[0] << " genome.fa out.bed 23 100000 25000" << std::endl;
+        std::cerr << "Example with threads: " << argv[0] << " genome.fa out.bed 23 100000 25000 8" << std::endl;
         return 1;
     }
 
@@ -141,15 +144,25 @@ int main(int argc, char* argv[]) {
     int k_mer_length = 0;
     int window_size = 0;
     int step_size = 0;
+    int num_threads = std::thread::hardware_concurrency(); // Default to number of CPU cores
 
     try {
         k_mer_length = std::stoi(argv[3]);
         window_size = std::stoi(argv[4]);
         step_size = std::stoi(argv[5]);
+        if (argc == 7) {
+            num_threads = std::stoi(argv[6]);
+            if (num_threads < 1) {
+                std::cerr << "Error: Number of threads must be at least 1." << std::endl;
+                return 1;
+            }
+        }
     } catch (const std::invalid_argument& e) {
-        std::cerr << "Error: Invalid format of numeric arguments (kmer_len, window_size, step_size)." << std::endl;
+        std::cerr << "Error: Invalid format of numeric arguments." << std::endl;
         return 1;
     }
+
+    std::cout << "Using " << num_threads << " threads for processing." << std::endl;
 
     if (k_mer_length > 31 || k_mer_length < 1) {
         std::cerr << "Error: K-mer length must be in range [1, 31] for 64-bit representation." << std::endl;
@@ -186,11 +199,33 @@ int main(int argc, char* argv[]) {
     }
     std::cout << "Reading completed. Found " << genome.size() << " chromosomes." << std::endl;
 
-    // --- Launch parallel processing ---
+    // --- Launch parallel processing with controlled thread pool ---
     std::vector<std::future<std::vector<BedResult>>> futures;
-    for (auto const& [name, seq] : genome) {
-        // std::async launches the function in a new thread, passing all parameters
-        futures.push_back(std::async(std::launch::async, process_chromosome_sliding, name, std::ref(seq), k_mer_length, window_size, step_size));
+    std::vector<std::pair<std::string, std::string*>> chrom_queue;
+    
+    // Prepare chromosome queue
+    for (auto& [name, seq] : genome) {
+        chrom_queue.push_back({name, &seq});
+    }
+    
+    // Process chromosomes in batches based on thread count
+    size_t batch_size = std::min(static_cast<size_t>(num_threads), chrom_queue.size());
+    
+    for (size_t i = 0; i < chrom_queue.size(); i += batch_size) {
+        // Launch a batch of threads
+        size_t current_batch_size = std::min(batch_size, chrom_queue.size() - i);
+        for (size_t j = 0; j < current_batch_size; ++j) {
+            auto& [name, seq_ptr] = chrom_queue[i + j];
+            futures.push_back(std::async(std::launch::async, process_chromosome_sliding, 
+                                        name, std::ref(*seq_ptr), k_mer_length, window_size, step_size));
+        }
+        
+        // If not the last batch, wait for current batch to complete before starting next
+        if (i + batch_size < chrom_queue.size()) {
+            for (size_t j = i; j < i + current_batch_size; ++j) {
+                futures[j].wait();
+            }
+        }
     }
 
     // --- Collect and write results ---
@@ -201,6 +236,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Write results maintaining chromosome order
     for (auto& fut : futures) {
         std::vector<BedResult> chrom_results = fut.get(); // Wait for thread completion and get result
         for (const auto& res : chrom_results) {

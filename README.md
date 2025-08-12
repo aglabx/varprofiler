@@ -5,11 +5,12 @@ A high-performance tool for analyzing k-mer variability across genomes, designed
 ## Features
 
 - **Fast k-mer counting**: Efficient 2-bit encoding for k-mers up to 31bp
-- **Parallel processing**: Multi-threaded chromosome processing for large genomes
+- **Parallel processing**: Multi-threaded chromosome processing with configurable thread count
 - **Sliding window analysis**: Configurable window size and step for fine-grained analysis
 - **Canonical k-mers**: Automatically handles reverse complements
 - **Visualization**: Generate publication-quality plots for each chromosome
 - **Memory efficient**: Optimized for large genome analysis
+- **Thread control**: Specify number of threads or auto-detect based on CPU cores
 
 ## Installation
 
@@ -41,7 +42,7 @@ pip install .
 ### Step 1: Generate k-mer profile
 
 ```bash
-./kmer_profiler <input.fasta> <output.bed> <kmer_len> <window_size> <step_size>
+./kmer_profiler <input.fasta> <output.bed> <kmer_len> <window_size> <step_size> [threads]
 ```
 
 **Parameters:**
@@ -50,10 +51,15 @@ pip install .
 - `kmer_len`: Length of k-mers (1-31, recommended: 23)
 - `window_size`: Size of sliding window in bp (e.g., 100000)
 - `step_size`: Step size for sliding window in bp (e.g., 25000)
+- `threads`: (Optional) Number of threads to use (default: number of CPU cores)
 
-**Example:**
+**Examples:**
 ```bash
+# Using default number of threads (auto-detect CPU cores)
 ./kmer_profiler genome.fa kmer_counts.bed 23 100000 25000
+
+# Using specific number of threads (e.g., 8 threads)
+./kmer_profiler genome.fa kmer_counts.bed 23 100000 25000 8
 ```
 
 ### Step 2: Visualize results
