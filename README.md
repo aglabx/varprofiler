@@ -41,7 +41,71 @@ pip install -r requirements.txt
 pip install .
 ```
 
-## Usage
+## Quick Start - Complete Pipeline
+
+The easiest way to run VarProfiler is using the unified pipeline script that handles all analysis steps automatically:
+
+```bash
+# Basic usage - runs complete analysis with default parameters
+python varprofiler_pipeline.py genome.fa -o results/
+
+# Use predefined profiles for different analysis depths
+python varprofiler_pipeline.py genome.fa -o results/ --profile standard
+
+# Use configuration file for reproducible analyses
+python varprofiler_pipeline.py genome.fa -c config.json
+
+# Using Makefile shortcuts
+make standard-run GENOME=genome.fa
+```
+
+### Pipeline Profiles
+
+VarProfiler includes three predefined analysis profiles:
+
+| Profile | K-mer Size | Window Size | Step Size | Use Case |
+|---------|------------|-------------|-----------|----------|
+| quick | 15 | 200kb | 100kb | Fast overview, large genomes |
+| standard | 23 | 100kb | 25kb | Default, balanced analysis |
+| detailed | 31 | 50kb | 10kb | High resolution, small genomes |
+
+### Pipeline Output
+
+The pipeline creates an organized output directory with:
+```
+varprofiler_results/
+├── kmer_profiles/       # BED files with k-mer counts
+├── satellites/          # Detected regions (GFF, FASTA, summary)
+├── plots/              # Chromosome and karyotype visualizations
+├── logs/               # Pipeline logs and configuration
+└── report.html         # Complete HTML report with all results
+```
+
+### Configuration File
+
+For reproducible analyses, use a JSON configuration file (see `config_example.json`):
+
+```json
+{
+  "input_fasta": "genome.fa",
+  "output_dir": "varprofiler_results",
+  "kmer_size": 23,
+  "window_size": 100000,
+  "step_size": 25000,
+  "threads": 8,
+  "detect_satellites": true,
+  "find_centromeres": true,
+  "percentile": 5,
+  "min_satellite_length": 10000,
+  "trf_annotations": "trf_output.gff"
+}
+```
+
+Run with config: `python varprofiler_pipeline.py genome.fa -c config.json`
+
+## Manual Usage - Step by Step
+
+For more control over individual steps, you can run each component separately:
 
 ### Step 1: Generate k-mer profile
 

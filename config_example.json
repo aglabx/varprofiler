@@ -1,0 +1,15 @@
+{
+  "input_fasta": "genome.fa",
+  "output_dir": "varprofiler_results",
+  "kmer_size": 23,
+  "window_size": 100000,
+  "step_size": 25000,
+  "threads": 8,
+  "detect_satellites": true,
+  "find_centromeres": true,
+  "percentile": 5,
+  "min_satellite_length": 10000,
+  "use_global_threshold": false,
+  "trf_annotations": null,
+  "trf_gff": null
+}
