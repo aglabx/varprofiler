@@ -51,15 +51,15 @@ def read_gff_satellites(gff_file_path):
     
     return satellites
 
-def plot_kmer_distribution(bed_file_path, output_dir, gff_file_path=None, kmer_size=23):
+def plot_kmer_distribution(bed_file_path, output_dir, gff_file_path, kmer_size):
     """
     Reads a BED file with k-mer counts and creates plots for each chromosome.
     
     Args:
         bed_file_path (str): Path to the input BED file.
         output_dir (str): Directory for saving plots.
-        gff_file_path (str, optional): Path to GFF file with satellite DNA annotations.
-        kmer_size (int): Size of k-mers used in analysis (default: 23).
+        gff_file_path (str or None): Path to GFF file with satellite DNA annotations.
+        kmer_size (int): Size of k-mers used in analysis.
     """
     try:
         # Load data with column names for clarity
@@ -167,8 +167,8 @@ def main():
     parser.add_argument(
         '-k', '--kmer-size',
         type=int,
-        default=23,
-        help='K-mer size used in analysis (default: 23).'
+        required=True,
+        help='K-mer size used in the analysis (must match the value used in kmer_profiler).'
     )
     
     args = parser.parse_args()
