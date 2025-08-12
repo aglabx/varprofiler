@@ -113,8 +113,11 @@ The tool outputs a standard BED file with the following columns:
 **Standard Karyotype Plot**
 - Single image with all chromosomes arranged in grid (3 pairs per row for diploid genomes)
 - Consistent scale: 1 Mb has same width across all chromosomes
-- Natural chromosome sorting (1, 2, ..., 10, ..., 22, X, Y, MT)
-- **Diploid genome support**: For diploid assemblies, use `_mat` or `_maternal` suffix for maternal chromosomes and `_pat` or `_paternal` suffix for paternal chromosomes. These will be displayed side by side in the karyotype plot
+- Natural chromosome sorting (1, 2, ..., 10, ..., 22, X, Y, Z, W, MT)
+- **Diploid genome support**: 
+  - For diploid assemblies, use `_mat` or `_maternal` suffix for maternal chromosomes and `_pat` or `_paternal` suffix for paternal chromosomes
+  - Autosomal chromosomes will be displayed side by side as pairs
+  - Sex chromosomes (X, Y, Z, W) are always displayed individually, even if they have mat/pat suffixes
 - Saved as `karyotype_kmer_distribution.png`
 
 **Grouped Karyotype Plots** 

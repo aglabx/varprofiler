@@ -190,8 +190,12 @@ def create_karyotype_plot(df, satellites, output_dir, kmer_size):
             return (1, 23)
         elif base == 'Y':
             return (1, 24)
-        elif base == 'M' or base == 'MT':
+        elif base == 'Z':
             return (1, 25)
+        elif base == 'W':
+            return (1, 26)
+        elif base == 'M' or base == 'MT':
+            return (1, 27)
         else:
             try:
                 return (0, int(base))
@@ -200,6 +204,9 @@ def create_karyotype_plot(df, satellites, output_dir, kmer_size):
     
     sorted_bases = sorted(chrom_groups.keys(), key=sort_base_chrom)
     
+    # Define sex chromosomes that should not be paired
+    sex_chromosomes = {'X', 'Y', 'Z', 'W', 'chrX', 'chrY', 'chrZ', 'chrW'}
+    
     # Create list of chromosome pairs (or singles)
     plot_items = []
     for base in sorted_bases:
@@ -207,11 +214,14 @@ def create_karyotype_plot(df, satellites, output_dir, kmer_size):
         # Sort within group: maternal first, then paternal, then no suffix
         chroms.sort(key=lambda x: 0 if x[0] == 'maternal' else (1 if x[0] == 'paternal' else 2))
         
-        if len(chroms) == 2 and chroms[0][0] == 'maternal' and chroms[1][0] == 'paternal':
-            # We have a pair - add as tuple
+        # Check if this is a sex chromosome
+        is_sex_chrom = base in sex_chromosomes or f'chr{base}' in sex_chromosomes
+        
+        if not is_sex_chrom and len(chroms) == 2 and chroms[0][0] == 'maternal' and chroms[1][0] == 'paternal':
+            # We have a pair - add as tuple (but not for sex chromosomes)
             plot_items.append((chroms[0][1], chroms[1][1]))
         else:
-            # Add individually
+            # Add individually (sex chromosomes or unpaired autosomes)
             for _, full_name in chroms:
                 plot_items.append((full_name, None))
     
