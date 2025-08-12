@@ -792,6 +792,116 @@ def read_fasta(filename):
     return sequences
 
 
+def extract_centromere_sequences(centromeres, genome_file, output_file):
+    """
+    Extract FASTA sequences specifically for predicted centromeres with detailed headers.
+    
+    Args:
+        centromeres: List of predicted centromere regions with scores
+        genome_file: Input genome FASTA file
+        output_file: Output FASTA file for centromere sequences
+    """
+    if not centromeres:
+        return
+    
+    print(f"\nExtracting centromere sequences from {genome_file}...")
+    
+    # Read genome sequences
+    genome = read_fasta(genome_file)
+    
+    if genome is None:
+        print(f"  Error: Could not read genome file {genome_file}")
+        return
+    
+    sequences = []
+    
+    for i, cent in enumerate(centromeres, 1):
+        chrom = cent['chrom']
+        if chrom not in genome:
+            print(f"  Warning: Chromosome {chrom} not found in genome")
+            continue
+        
+        start = cent['start']
+        end = cent['end']
+        
+        # Extract sequence
+        if end <= len(genome[chrom]):
+            seq = genome[chrom][start:end]
+        else:
+            seq = genome[chrom][start:]
+        
+        # Build detailed header with all information
+        header_parts = [
+            f"centromere_{i}",
+            f"chr={chrom}",
+            f"pos={start+1}-{end}",  # 1-based for display
+            f"length={end-start}bp",
+            f"score={cent.get('score', 0):.1f}"
+        ]
+        
+        # Add confidence level
+        score = cent.get('score', 0)
+        if score >= 70:
+            header_parts.append("confidence=HIGH")
+        elif score >= 50:
+            header_parts.append("confidence=MEDIUM")
+        else:
+            header_parts.append("confidence=LOW")
+        
+        # Add k-mer percentage
+        header_parts.append(f"kmer_diversity={cent['kmer_percentage']:.2f}%")
+        
+        # Add CENP-B information if available
+        if 'cenpb_count' in cent:
+            header_parts.append(f"cenpb_count={cent['cenpb_count']}")
+            header_parts.append(f"cenpb_density={cent['cenpb_density']:.3f}/kb")
+        
+        # Add array context
+        if 'array_size' in cent:
+            header_parts.append(f"array_size={cent['array_size']}bp")
+        
+        # Add scoring weights if available
+        if 'weights' in cent:
+            weight_str = ','.join([f"{k}:{v}" for k, v in cent['weights'].items()])
+            header_parts.append(f"weights=({weight_str})")
+        
+        # Is it a local minimum?
+        if cent.get('is_local_minimum'):
+            header_parts.append("local_minimum=yes")
+        
+        header = " ".join(header_parts)
+        sequences.append((header, seq))
+    
+    # Write FASTA file
+    with open(output_file, 'w') as f:
+        for header, seq in sequences:
+            f.write(f">{header}\n")
+            # Write sequence in 80-character lines
+            for i in range(0, len(seq), 80):
+                f.write(seq[i:i+80] + "\n")
+    
+    print(f"  Extracted {len(sequences)} centromere sequences to {output_file}")
+    
+    # Print summary
+    if sequences:
+        total_bp = sum(len(seq) for _, seq in sequences)
+        avg_length = total_bp // len(sequences)
+        print(f"  Total: {total_bp:,} bp")
+        print(f"  Average length: {avg_length:,} bp")
+        
+        # Report by confidence
+        high = sum(1 for h, _ in sequences if "confidence=HIGH" in h)
+        med = sum(1 for h, _ in sequences if "confidence=MEDIUM" in h)
+        low = sum(1 for h, _ in sequences if "confidence=LOW" in h)
+        
+        if high > 0:
+            print(f"  High confidence: {high}")
+        if med > 0:
+            print(f"  Medium confidence: {med}")
+        if low > 0:
+            print(f"  Low confidence: {low}")
+
+
 def extract_fasta_sequences(regions, centromeres, genome_file, output_file):
     """
     Extract FASTA sequences for detected regions.
@@ -1012,6 +1122,11 @@ def main():
     if args.genome:
         fasta_file = f"{args.output_prefix}.fasta"
         extract_fasta_sequences(organized_regions, centromeres, args.genome, fasta_file)
+        
+        # Extract centromere sequences separately
+        if centromeres:
+            centromere_fasta = f"{args.output_prefix}_centromeres.fasta"
+            extract_centromere_sequences(centromeres, args.genome, centromere_fasta)
     
     # Write summary statistics
     summary_file = f"{args.output_prefix}_summary.txt"
@@ -1123,7 +1238,10 @@ def main():
     print(f"\nDone! Output files:")
     print(f"  - {gff_file} (GFF3 annotations)")
     if args.genome:
-        print(f"  - {fasta_file} (FASTA sequences)")
+        print(f"  - {fasta_file} (FASTA sequences for all regions)")
+        if centromeres:
+            centromere_fasta = f"{args.output_prefix}_centromeres.fasta"
+            print(f"  - {centromere_fasta} (FASTA sequences for centromeres)")
     print(f"  - {summary_file} (Summary statistics)")
 
 
