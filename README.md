@@ -10,6 +10,7 @@ A high-performance tool for analyzing k-mer variability across genomes, designed
 - **Canonical k-mers**: Automatically handles reverse complements
 - **Satellite DNA detection**: Automatic identification of low k-mer variability regions
 - **Centromere prediction**: Find potential functional centromeres within satellite arrays
+- **CENP-B box detection**: Search for CENP-B box motifs using edit distance in centromeric regions
 - **Sequence extraction**: Export detected regions as FASTA sequences for further analysis
 - **Visualization**: Generate publication-quality plots for each chromosome
 - **Memory efficient**: Optimized for large genome analysis
@@ -163,8 +164,8 @@ python detect_satellites.py kmer_counts.bed -k 23 -o human_satellites -g genome.
 # With TRF annotations for repeat classification
 python detect_satellites.py kmer_counts.bed -k 23 -o human_satellites -t trf_annotations.gff
 
-# Full analysis with all features
-python detect_satellites.py kmer_counts.bed -k 23 -o human_satellites -g genome.fa -t trf_annotations.gff --find-centromeres
+# Full analysis with all features including CENP-B box detection
+python detect_satellites.py kmer_counts.bed -k 23 -o human_satellites -g genome.fa -t trf_annotations.gff --find-centromeres --cenpb-threads 4
 ```
 
 ### Step 3: Visualize results
@@ -243,6 +244,29 @@ The tool outputs a standard BED file with the following columns:
 - Dot chromosomes displayed with up to 8 per row for better space utilization
 - Chromosome sizes shown in titles for easy reference
 - Saved as separate files: `grouped_Large_gt150_Mb_kmer_distribution.png`, `grouped_Dot_chromosomes_lt10_Mb_kmer_distribution.png`, etc.
+
+## CENP-B Box Detection
+
+VarProfiler includes a specialized tool for detecting CENP-B boxes - conserved 17bp sequences found in centromeric regions. The canonical human CENP-B box is `YTTCGTTGGAARCGGGA`, but it varies across species.
+
+### Usage
+```bash
+# Direct usage of cenpb_finder
+./cenpb_finder genome.fa regions.bed output.tsv -p YTTCGTTGGAARCGGGA -d 3 -t 4
+
+# Integrated with satellite detection
+python detect_satellites.py kmer_counts.bed -k 23 -g genome.fa --find-centromeres \
+  --cenpb-pattern YTTCGTTGGAARCGGGA --cenpb-distance 3
+```
+
+### Features
+- **Edit distance search**: Finds approximate matches allowing insertions, deletions, and substitutions
+- **IUPAC support**: Handles degenerate nucleotide codes in the pattern
+- **Both strand search**: Searches forward and reverse complement
+- **Parallel processing**: Multi-threaded for large datasets
+- **Integration**: Automatically runs on low k-mer diversity regions when detecting centromeres
+
+The CENP-B box count and density are included in the GFF annotations and help confirm functional centromeres, as these sequences are binding sites for CENP-B protein.
 
 ## Algorithm
 

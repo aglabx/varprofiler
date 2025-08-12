@@ -2,36 +2,39 @@
 
 CXX = g++
 CXXFLAGS = -std=c++17 -O3 -march=native -pthread -Wall -Wextra
-TARGET = kmer_profiler
-SOURCE = kmer_profiler.cpp
+TARGETS = kmer_profiler cenpb_finder
 
-# Main target
-all: $(TARGET)
+# Main target - build all tools
+all: $(TARGETS)
 
 # Compile k-mer profiler
-$(TARGET): $(SOURCE)
-	$(CXX) $(CXXFLAGS) -o $(TARGET) $(SOURCE)
+kmer_profiler: kmer_profiler.cpp
+	$(CXX) $(CXXFLAGS) -o $@ $<
+
+# Compile CENP-B box finder
+cenpb_finder: cenpb_finder.cpp
+	$(CXX) $(CXXFLAGS) -o $@ $<
 
 # Clean build artifacts
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGETS)
 	rm -rf __pycache__
 	rm -f *.pyc
 
 # Install to /usr/local/bin
-install: $(TARGET)
-	cp $(TARGET) /usr/local/bin/
+install: $(TARGETS)
+	cp $(TARGETS) /usr/local/bin/
 
 # Uninstall from /usr/local/bin
 uninstall:
-	rm -f /usr/local/bin/$(TARGET)
+	for target in $(TARGETS); do rm -f /usr/local/bin/$$target; done
 
 # Install Python dependencies
 install-deps:
 	pip install pandas matplotlib numpy
 
 # Run tests (if we have test data)
-test: $(TARGET)
+test: $(TARGETS)
 	@echo "Running test pipeline..."
 	@if [ -f "test_data/test_genome.fa" ]; then \
 		python varprofiler_pipeline.py test_data/test_genome.fa -o test_output --profile quick; \
@@ -40,7 +43,7 @@ test: $(TARGET)
 	fi
 
 # Run quick analysis
-quick-run: $(TARGET)
+quick-run: $(TARGETS)
 	@if [ -z "$(GENOME)" ]; then \
 		echo "Usage: make quick-run GENOME=path/to/genome.fa"; \
 		exit 1; \
@@ -48,7 +51,7 @@ quick-run: $(TARGET)
 	python varprofiler_pipeline.py $(GENOME) -o quick_results --profile quick
 
 # Run standard analysis  
-standard-run: $(TARGET)
+standard-run: $(TARGETS)
 	@if [ -z "$(GENOME)" ]; then \
 		echo "Usage: make standard-run GENOME=path/to/genome.fa"; \
 		exit 1; \
@@ -56,7 +59,7 @@ standard-run: $(TARGET)
 	python varprofiler_pipeline.py $(GENOME) -o standard_results --profile standard
 
 # Run detailed analysis
-detailed-run: $(TARGET)
+detailed-run: $(TARGETS)
 	@if [ -z "$(GENOME)" ]; then \
 		echo "Usage: make detailed-run GENOME=path/to/genome.fa"; \
 		exit 1; \
@@ -64,7 +67,7 @@ detailed-run: $(TARGET)
 	python varprofiler_pipeline.py $(GENOME) -o detailed_results --profile detailed
 
 # Run with config file
-config-run: $(TARGET)
+config-run: $(TARGETS)
 	@if [ -z "$(CONFIG)" ]; then \
 		echo "Usage: make config-run CONFIG=path/to/config.json"; \
 		exit 1; \

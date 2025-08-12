@@ -204,7 +204,77 @@ def get_size_category(length):
         return '<1kb'
 
 
-def find_centromere_candidates(regions, df, kmer_size):
+def run_cenpb_finder(bed_file, genome_file, output_file, pattern="YTTCGTTGGAARCGGGA", 
+                    max_edit_distance=3, threads=1):
+    """
+    Run cenpb_finder tool to search for CENP-B boxes in regions.
+    
+    Args:
+        bed_file: BED file with regions to search
+        genome_file: Genome FASTA file
+        output_file: Output TSV file
+        pattern: CENP-B box pattern (default: canonical human pattern)
+        max_edit_distance: Maximum allowed edit distance
+        threads: Number of threads to use
+    
+    Returns:
+        Dictionary with region coordinates as keys and CENP-B counts as values
+    """
+    import subprocess
+    from pathlib import Path
+    
+    # Check if cenpb_finder exists
+    cenpb_finder = Path('./cenpb_finder')
+    if not cenpb_finder.exists():
+        print("Warning: cenpb_finder not found. Skipping CENP-B box analysis.")
+        return {}
+    
+    # Build command
+    cmd = [
+        str(cenpb_finder),
+        genome_file,
+        bed_file,
+        output_file,
+        '-p', pattern,
+        '-d', str(max_edit_distance),
+        '-t', str(threads)
+    ]
+    
+    try:
+        print(f"Searching for CENP-B boxes using pattern {pattern}...")
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        print(result.stdout)
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: cenpb_finder failed: {e}")
+        return {}
+    
+    # Parse results
+    cenpb_data = {}
+    try:
+        with open(output_file, 'r') as f:
+            for line in f:
+                if line.startswith('#'):
+                    continue
+                parts = line.strip().split('\t')
+                if len(parts) >= 6:
+                    chrom = parts[0]
+                    start = int(parts[1])
+                    end = int(parts[2])
+                    cenpb_count = int(parts[4])
+                    cenpb_density = float(parts[5])
+                    key = f"{chrom}:{start}-{end}"
+                    cenpb_data[key] = {
+                        'count': cenpb_count,
+                        'density': cenpb_density,
+                        'positions': parts[6] if len(parts) > 6 and parts[6] != '.' else None
+                    }
+    except Exception as e:
+        print(f"Warning: Could not parse CENP-B results: {e}")
+    
+    return cenpb_data
+
+
+def find_centromere_candidates(regions, df, kmer_size, cenpb_data=None):
     """
     Find potential centromere-containing regions as windows with minimal k-mer diversity
     within large satellite arrays.
@@ -247,7 +317,7 @@ def find_centromere_candidates(regions, df, kmer_size):
                 
                 # Check if this is significantly lower than region mean
                 if min_window['kmer_percentage'] < mean_value * 0.5:  # At least 50% lower
-                    centromeres.append({
+                    cent_info = {
                         'chrom': chrom,
                         'start': min_window['start'],
                         'end': min_window['end'],
@@ -255,7 +325,16 @@ def find_centromere_candidates(regions, df, kmer_size):
                         'satellite_start': start,
                         'satellite_end': end,
                         'satellite_mean': mean_value
-                    })
+                    }
+                    
+                    # Add CENP-B box information if available
+                    if cenpb_data:
+                        key = f"{chrom}:{min_window['start']}-{min_window['end']}"
+                        if key in cenpb_data:
+                            cent_info['cenpb_count'] = cenpb_data[key]['count']
+                            cent_info['cenpb_density'] = cenpb_data[key]['density']
+                    
+                    centromeres.append(cent_info)
     
     return centromeres
 
@@ -346,9 +425,17 @@ def write_gff(regions, centromeres, output_file, source='VarProfiler'):
                 f"Name=centromere_region_{chrom}_{start}_{end}",
                 f"kmer_percent={cent['kmer_percentage']:.2f}",
                 f"satellite_region={cent['satellite_start']+1}..{cent['satellite_end']}",
-                f"satellite_mean={cent['satellite_mean']:.2f}",
-                f"color=0,0,255"  # Blue for centromeres
+                f"satellite_mean={cent['satellite_mean']:.2f}"
             ]
+            
+            # Add CENP-B box information if available
+            if 'cenpb_count' in cent:
+                attributes.extend([
+                    f"cenpb_count={cent['cenpb_count']}",
+                    f"cenpb_density={cent['cenpb_density']:.3f}"
+                ])
+            
+            attributes.append(f"color=0,0,255")  # Blue for centromeres
             
             f.write(f"{chrom}\t{source}\tcentromere_containing_region\t{start}\t{end}\t"
                    f"{score}\t.\t.\t{';'.join(attributes)}\n")
@@ -642,6 +729,15 @@ def main():
                        help='Attempt to identify centromere candidates')
     parser.add_argument('-t', '--trf-annotations',
                        help='GFF file with TRF annotations for repeat classification')
+    parser.add_argument('--cenpb-pattern',
+                       default='YTTCGTTGGAARCGGGA',
+                       help='CENP-B box pattern (default: YTTCGTTGGAARCGGGA)')
+    parser.add_argument('--cenpb-distance',
+                       type=int, default=3,
+                       help='Maximum edit distance for CENP-B box search (default: 3)')
+    parser.add_argument('--cenpb-threads',
+                       type=int, default=1,
+                       help='Number of threads for CENP-B search (default: 1)')
     
     args = parser.parse_args()
     
@@ -686,12 +782,47 @@ def main():
             if cls in class_counts:
                 print(f"    {cls}: {class_counts[cls]}")
     
+    # Search for CENP-B boxes if genome provided and finding centromeres
+    cenpb_data = {}
+    if args.find_centromeres and args.genome:
+        # Write regions to temporary BED file for CENP-B search
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.bed', delete=False) as tmp_bed:
+            for chrom, chrom_regions in regions.items():
+                for start, end, value in chrom_regions:
+                    tmp_bed.write(f"{chrom}\t{start}\t{end}\t{value:.2f}\n")
+            tmp_bed_path = tmp_bed.name
+        
+        # Run CENP-B finder
+        cenpb_output = f"{args.output_prefix}_cenpb.tsv"
+        cenpb_data = run_cenpb_finder(
+            tmp_bed_path,
+            args.genome,
+            cenpb_output,
+            pattern=args.cenpb_pattern,
+            max_edit_distance=args.cenpb_distance,
+            threads=args.cenpb_threads
+        )
+        
+        # Clean up temporary file
+        import os
+        os.unlink(tmp_bed_path)
+        
+        if cenpb_data:
+            print(f"  Found CENP-B boxes in {len([v for v in cenpb_data.values() if v['count'] > 0])} regions")
+    
     # Find centromere candidates if requested
     centromeres = []
     if args.find_centromeres:
         print("\nSearching for centromere candidates...")
-        centromeres = find_centromere_candidates(regions, df, args.kmer_size)
+        centromeres = find_centromere_candidates(regions, df, args.kmer_size, cenpb_data)
         print(f"  Found {len(centromeres)} potential centromeres")
+        
+        # Report centromeres with CENP-B boxes
+        if cenpb_data:
+            cent_with_cenpb = sum(1 for c in centromeres if 'cenpb_count' in c and c['cenpb_count'] > 0)
+            if cent_with_cenpb > 0:
+                print(f"    {cent_with_cenpb} with CENP-B boxes")
     
     # Write GFF file
     gff_file = f"{args.output_prefix}.gff3"
