@@ -361,7 +361,7 @@ def score_centromere_likelihood(window, kmer_percent, cenpb_density, array_size,
     return total_score, weights
 
 
-def find_centromere_candidates(regions, df, kmer_size, cenpb_data=None):
+def find_centromere_candidates(regions, df, kmer_size, cenpb_data=None, all_candidates=False, min_score=30):
     """
     Find potential centromere-containing regions using multi-signal approach:
     1. CENP-B box density (primary signal)
@@ -374,6 +374,8 @@ def find_centromere_candidates(regions, df, kmer_size, cenpb_data=None):
         df: Original dataframe with all windows
         kmer_size: K-mer size
         cenpb_data: Dictionary with CENP-B box counts
+        all_candidates: If True, return all candidates above min_score, not just best per chromosome
+        min_score: Minimum score threshold for candidates (default: 30)
     
     Returns:
         List of windows likely containing functional centromeres, scored by confidence
@@ -446,39 +448,66 @@ def find_centromere_candidates(regions, df, kmer_size, cenpb_data=None):
             # Otherwise fall back to minimum k-mer diversity
             window_scores.sort(key=lambda x: x['score'], reverse=True)
             
-            # Take the best scoring window (or multiple if score is high)
-            for ws in window_scores:
-                if ws['score'] >= 30:  # Minimum threshold
-                    window = ws['window']
-                    cent_info = {
-                        'chrom': chrom,
-                        'start': int(window['start']),
-                        'end': int(window['end']),
-                        'kmer_percentage': window['kmer_percentage'],
-                        'satellite_start': array_start,
-                        'satellite_end': array_end,
-                        'satellite_mean': array_mean,
-                        'array_size': array_size,
-                        'score': ws['score'],
-                        'weights': ws['weights'],
-                        'cenpb_count': ws['cenpb_count'],
-                        'cenpb_density': ws['cenpb_density'],
-                        'is_local_minimum': ws['is_minimum']
-                    }
-                    centromeres.append(cent_info)
-                    break  # Take only best per array (can be changed)
+            # Decide how many windows to take from this array
+            if all_candidates:
+                # Take all windows that meet the minimum score threshold
+                for ws in window_scores:
+                    if ws['score'] >= min_score:
+                        window = ws['window']
+                        cent_info = {
+                            'chrom': chrom,
+                            'start': int(window['start']),
+                            'end': int(window['end']),
+                            'kmer_percentage': window['kmer_percentage'],
+                            'satellite_start': array_start,
+                            'satellite_end': array_end,
+                            'satellite_mean': array_mean,
+                            'array_size': array_size,
+                            'score': ws['score'],
+                            'weights': ws['weights'],
+                            'cenpb_count': ws['cenpb_count'],
+                            'cenpb_density': ws['cenpb_density'],
+                            'is_local_minimum': ws['is_minimum']
+                        }
+                        centromeres.append(cent_info)
+            else:
+                # Take only the best scoring window per array
+                for ws in window_scores:
+                    if ws['score'] >= min_score:
+                        window = ws['window']
+                        cent_info = {
+                            'chrom': chrom,
+                            'start': int(window['start']),
+                            'end': int(window['end']),
+                            'kmer_percentage': window['kmer_percentage'],
+                            'satellite_start': array_start,
+                            'satellite_end': array_end,
+                            'satellite_mean': array_mean,
+                            'array_size': array_size,
+                            'score': ws['score'],
+                            'weights': ws['weights'],
+                            'cenpb_count': ws['cenpb_count'],
+                            'cenpb_density': ws['cenpb_density'],
+                            'is_local_minimum': ws['is_minimum']
+                        }
+                        centromeres.append(cent_info)
+                        break  # Take only best per array
     
-    # Sort by score and select best per chromosome
+    # Sort by score
     centromeres.sort(key=lambda x: x['score'], reverse=True)
     
-    # Keep only best centromere per chromosome
-    best_per_chrom = {}
-    for cent in centromeres:
-        chrom = cent['chrom']
-        if chrom not in best_per_chrom or cent['score'] > best_per_chrom[chrom]['score']:
-            best_per_chrom[chrom] = cent
-    
-    return list(best_per_chrom.values())
+    if all_candidates:
+        # Return all candidates that meet the threshold
+        return centromeres
+    else:
+        # Keep only best centromere per chromosome
+        best_per_chrom = {}
+        for cent in centromeres:
+            chrom = cent['chrom']
+            if chrom not in best_per_chrom or cent['score'] > best_per_chrom[chrom]['score']:
+                best_per_chrom[chrom] = cent
+        
+        return list(best_per_chrom.values())
 
 
 def write_gff(regions, centromeres, output_file, source='VarProfiler'):
@@ -1003,6 +1032,12 @@ def main():
     parser.add_argument('--find-centromeres',
                        action='store_true',
                        help='Attempt to identify centromere candidates')
+    parser.add_argument('--all-centromeres',
+                       action='store_true',
+                       help='Report all centromere candidates above threshold, not just best per chromosome')
+    parser.add_argument('--centromere-min-score',
+                       type=int, default=30,
+                       help='Minimum score for centromere candidates (0-100, default: 30)')
     parser.add_argument('-t', '--trf-annotations',
                        help='GFF file with TRF annotations for repeat classification')
     parser.add_argument('--cenpb-pattern',
@@ -1091,8 +1126,30 @@ def main():
     centromeres = []
     if args.find_centromeres:
         print("\nSearching for centromere candidates...")
-        centromeres = find_centromere_candidates(regions, df, args.kmer_size, cenpb_data)
-        print(f"  Found {len(centromeres)} potential centromeres")
+        if args.all_centromeres:
+            print(f"  Mode: All candidates with score >= {args.centromere_min_score}")
+        else:
+            print(f"  Mode: Best per chromosome (score >= {args.centromere_min_score})")
+        
+        centromeres = find_centromere_candidates(
+            regions, df, args.kmer_size, cenpb_data,
+            all_candidates=args.all_centromeres,
+            min_score=args.centromere_min_score
+        )
+        
+        if args.all_centromeres:
+            # Report by chromosome
+            chrom_counts = {}
+            for cent in centromeres:
+                chrom = cent['chrom']
+                chrom_counts[chrom] = chrom_counts.get(chrom, 0) + 1
+            
+            print(f"  Found {len(centromeres)} potential centromeres across {len(chrom_counts)} chromosomes")
+            if len(chrom_counts) <= 10:
+                for chrom in sorted(chrom_counts.keys()):
+                    print(f"    {chrom}: {chrom_counts[chrom]} candidates")
+        else:
+            print(f"  Found {len(centromeres)} potential centromeres (best per chromosome)")
         
         # Report centromeres with confidence scores
         if centromeres:

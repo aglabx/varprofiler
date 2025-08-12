@@ -165,11 +165,15 @@ python detect_satellites.py <input.bed> -k <kmer_size> [-o output_prefix] [-g ge
 - `-t, --trf-annotations`: GFF file with TRF annotations for repeat classification
 - `--global-threshold`: Use global threshold instead of per-chromosome
 - `--find-centromeres`: Attempt to identify centromere candidates
+- `--all-centromeres`: Report all centromere candidates, not just best per chromosome
+- `--centromere-min-score`: Minimum score for centromere candidates (0-100, default: 30)
 
 **Output files:**
 - `.gff3`: GFF3 annotations for all detected regions
 - `.fasta`: FASTA sequences of detected regions (if genome provided)
+- `_centromeres.fasta`: FASTA sequences of predicted centromeres with detailed headers
 - `_summary.txt`: Summary statistics
+- `_cenpb.tsv`: CENP-B box analysis results (if genome provided)
 
 **Example:**
 ```bash
@@ -184,6 +188,9 @@ python detect_satellites.py kmer_counts.bed -k 23 -o human_satellites -t trf_ann
 
 # Full analysis with all features including CENP-B box detection
 python detect_satellites.py kmer_counts.bed -k 23 -o human_satellites -g genome.fa -t trf_annotations.gff --find-centromeres --cenpb-threads 4
+
+# Find ALL potential centromeres (not just best per chromosome)
+python detect_satellites.py kmer_counts.bed -k 23 -o all_centromeres -g genome.fa --find-centromeres --all-centromeres --centromere-min-score 40
 ```
 
 ### Step 3: Visualize results
