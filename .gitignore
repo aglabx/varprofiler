@@ -205,3 +205,13 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Manuscript files (not ready for publication)
+manuscript.md
+supplementary.md
+
+# Compiled C++ binary
+kmer_profiler
+
+# IDE specific
+.vscode/
