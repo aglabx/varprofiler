@@ -538,9 +538,16 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    if (config.threads < 1 || config.threads > 100) {
-        std::cerr << "Error: Thread count must be between 1 and 100\n";
+    if (config.threads < 1) {
+        std::cerr << "Error: Thread count must be at least 1\n";
         return 1;
+    }
+    
+    // Get hardware concurrency if available
+    unsigned int max_threads = std::thread::hardware_concurrency();
+    if (max_threads > 0 && (unsigned int)config.threads > max_threads * 2) {
+        std::cerr << "Warning: Using " << config.threads << " threads (detected " 
+                  << max_threads << " hardware threads). This may not improve performance.\n";
     }
     
     // Run analysis
