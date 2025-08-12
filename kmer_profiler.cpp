@@ -60,7 +60,7 @@ uint64_t reverse_complement_2bit(uint64_t kmer, int k_mer_length) {
  */
 std::vector<BedResult> process_chromosome_sliding(const std::string& chrom_name, const std::string& seq, int k_mer_length, int window_size, int step_size) {
     std::vector<BedResult> results;
-    if (seq.length() < window_size) {
+    if (seq.length() < static_cast<size_t>(window_size)) {
         std::cerr << "Warning: Chromosome " << chrom_name << " is too short, skipping." << std::endl;
         return results;
     }
@@ -73,7 +73,7 @@ std::vector<BedResult> process_chromosome_sliding(const std::string& chrom_name,
     std::unordered_map<uint64_t, int> kmer_counts;
     
     // --- Initialize first WINDOW ---
-    for (size_t i = 0; i < window_size - k_mer_length + 1; ++i) {
+    for (size_t i = 0; i < static_cast<size_t>(window_size - k_mer_length + 1); ++i) {
         std::string kmer_str = seq.substr(i, k_mer_length);
         if (kmer_str.find('N') != std::string::npos || kmer_str.find('n') != std::string::npos) continue;
         
@@ -87,12 +87,12 @@ std::vector<BedResult> process_chromosome_sliding(const std::string& chrom_name,
     results.push_back({chrom_name, 0, (size_t)window_size, kmer_counts.size()});
 
     // --- Slide through the rest of the chromosome ---
-    for (size_t start = step_size; start + window_size <= seq.length(); start += step_size) {
-        size_t end = start + window_size;
+    for (size_t start = static_cast<size_t>(step_size); start + static_cast<size_t>(window_size) <= seq.length(); start += static_cast<size_t>(step_size)) {
+        size_t end = start + static_cast<size_t>(window_size);
         
         // "Subtract" k-mers from the exited segment (left)
-        for (size_t i = start - step_size; i < start; ++i) {
-            if (i + k_mer_length > seq.length()) break;
+        for (size_t i = start - static_cast<size_t>(step_size); i < start; ++i) {
+            if (i + static_cast<size_t>(k_mer_length) > seq.length()) break;
             std::string old_kmer_str = seq.substr(i, k_mer_length);
             if (old_kmer_str.find('N') != std::string::npos || old_kmer_str.find('n') != std::string::npos) continue;
             
@@ -110,8 +110,8 @@ std::vector<BedResult> process_chromosome_sliding(const std::string& chrom_name,
         }
 
         // "Add" k-mers from the new segment (right)
-        for (size_t i = end - step_size; i < end - k_mer_length + 1; ++i) {
-             if (i + k_mer_length > seq.length()) break;
+        for (size_t i = end - static_cast<size_t>(step_size); i < end - static_cast<size_t>(k_mer_length) + 1; ++i) {
+             if (i + static_cast<size_t>(k_mer_length) > seq.length()) break;
              std::string new_kmer_str = seq.substr(i, k_mer_length);
              if (new_kmer_str.find('N') != std::string::npos || new_kmer_str.find('n') != std::string::npos) continue;
 
