@@ -147,6 +147,9 @@ def plot_kmer_distribution(bed_file_path, output_dir, gff_file_path, kmer_size):
     
     # Create karyotype-wide plot with all chromosomes
     create_karyotype_plot(df, satellites, output_dir, kmer_size)
+    
+    # Create grouped karyotype plot with size-based grouping
+    create_grouped_karyotype_plot(df, satellites, output_dir, kmer_size)
 
 def create_karyotype_plot(df, satellites, output_dir, kmer_size):
     """
@@ -351,6 +354,148 @@ def create_karyotype_plot(df, satellites, output_dir, kmer_size):
     plt.close(fig)
     
     print(f"Karyotype plot saved as: {output_filename}")
+
+def create_grouped_karyotype_plot(df, satellites, output_dir, kmer_size):
+    """
+    Create a multi-panel plot with chromosomes grouped by size.
+    Each group has its own scale to ensure chromosomes fill at least 60% of the plot width.
+    """
+    print("\nCreating grouped karyotype plot...")
+    
+    # Calculate position_mb and kmer_percentage if not already present
+    if 'position_mb' not in df.columns:
+        df['position_mb'] = (df['start'] + df['end']) / 2 / 1_000_000
+    
+    if 'kmer_percentage' not in df.columns:
+        df['window_size'] = df['end'] - df['start']
+        df['max_kmers'] = df['window_size'] - kmer_size + 1
+        df['kmer_percentage'] = (df['kmer_count'] / df['max_kmers']) * 100
+    
+    # Get chromosome sizes
+    chrom_sizes = {}
+    for chrom in df['chromosome'].unique():
+        chrom_df = df[df['chromosome'] == chrom]
+        if len(chrom_df) > 0:
+            chrom_sizes[chrom] = chrom_df['position_mb'].max()
+    
+    # Define size groups with thresholds (in Mb)
+    # We'll create groups to maximize chromosome visibility
+    groups = []
+    
+    # Sort chromosomes by size
+    sorted_chroms = sorted(chrom_sizes.items(), key=lambda x: x[1], reverse=True)
+    
+    # Group chromosomes by size ranges
+    # Calculate optimal groupings based on size distribution
+    sizes = [size for _, size in sorted_chroms]
+    
+    if len(sizes) > 0:
+        # Define grouping thresholds
+        if max(sizes) > 200:  # Large genomes
+            thresholds = [150, 100, 50, 0]
+            group_names = ['Large (>150 Mb)', 'Medium (100-150 Mb)', 'Small (50-100 Mb)', 'Tiny (<50 Mb)']
+        elif max(sizes) > 100:  # Medium genomes
+            thresholds = [100, 50, 25, 0]
+            group_names = ['Large (>100 Mb)', 'Medium (50-100 Mb)', 'Small (25-50 Mb)', 'Tiny (<25 Mb)']
+        else:  # Small genomes
+            thresholds = [50, 25, 10, 0]
+            group_names = ['Large (>50 Mb)', 'Medium (25-50 Mb)', 'Small (10-25 Mb)', 'Tiny (<10 Mb)']
+        
+        # Assign chromosomes to groups
+        grouped_chroms = {name: [] for name in group_names}
+        for chrom, size in sorted_chroms:
+            for i, threshold in enumerate(thresholds[:-1]):
+                if size > thresholds[i+1]:
+                    grouped_chroms[group_names[i]].append((chrom, size))
+                    break
+        
+        # Remove empty groups
+        grouped_chroms = {k: v for k, v in grouped_chroms.items() if v}
+        
+        # Create figure with subplots for each group
+        n_groups = len(grouped_chroms)
+        fig = plt.figure(figsize=(24, 5 * n_groups))
+        
+        for group_idx, (group_name, chroms) in enumerate(grouped_chroms.items()):
+            if not chroms:
+                continue
+                
+            # Calculate number of rows and columns for this group
+            n_chroms = len(chroms)
+            n_cols = min(4, n_chroms)  # Max 4 chromosomes per row
+            n_rows = (n_chroms + n_cols - 1) // n_cols
+            
+            # Calculate the maximum size in this group for scaling
+            group_max_size = max(size for _, size in chroms)
+            
+            # Create subplot for this group
+            for idx, (chrom, size) in enumerate(chroms):
+                # Calculate subplot position
+                subplot_idx = group_idx * 100 + (n_rows * 10) + (n_cols) + idx + 1
+                ax = plt.subplot(n_groups, max(4, n_cols), group_idx * max(4, n_cols) + idx + 1)
+                
+                chrom_df = df[df['chromosome'] == chrom].copy()
+                
+                if len(chrom_df) == 0:
+                    ax.axis('off')
+                    continue
+                
+                # Add satellite annotations if available
+                if chrom in satellites:
+                    for start, end in satellites[chrom]:
+                        start_mb = start / 1_000_000
+                        end_mb = end / 1_000_000
+                        ax.axvspan(start_mb, end_mb, alpha=0.15, color='orange')
+                
+                # Plot k-mer percentage
+                ax.plot(chrom_df['position_mb'], chrom_df['kmer_percentage'], 
+                        color='darkcyan', linewidth=0.8)
+                ax.fill_between(chrom_df['position_mb'], chrom_df['kmer_percentage'], 
+                                alpha=0.2, color='darkcyan')
+                
+                # Set x-axis scale based on group maximum
+                # We want chromosomes to fill at least 60% of the plot width
+                ax.set_xlim(0, group_max_size * 1.1)  # 10% padding
+                ax.set_ylim(0, 110)
+                
+                # Format axes
+                ax.set_title(f'{chrom} ({size:.1f} Mb)', fontsize=10, fontweight='bold')
+                ax.set_xlabel('Mb', fontsize=8)
+                if idx == 0:
+                    ax.set_ylabel('% unique', fontsize=8)
+                ax.tick_params(axis='both', which='major', labelsize=7)
+                ax.grid(True, alpha=0.3, linewidth=0.5)
+                
+                # Format y-axis as percentage
+                ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.0f}%'))
+            
+            # Add group title
+            plt.text(0.02, 0.98 - group_idx * (1.0 / n_groups), group_name, 
+                    transform=fig.transFigure, fontsize=12, fontweight='bold',
+                    verticalalignment='top')
+        
+        # Main title
+        fig.suptitle(f'Size-grouped distribution of unique {kmer_size}-mers', 
+                    fontsize=16, fontweight='bold', y=1.02)
+        
+        # Adjust layout
+        plt.tight_layout()
+        
+        # Save grouped plot
+        output_filename = os.path.join(output_dir, 'grouped_karyotype_kmer_distribution.png')
+        plt.savefig(output_filename, dpi=200, bbox_inches='tight')
+        plt.close(fig)
+        
+        print(f"Grouped karyotype plot saved as: {output_filename}")
+        
+        # Print grouping statistics
+        print("\nChromosome grouping statistics:")
+        for group_name, chroms in grouped_chroms.items():
+            print(f"  {group_name}: {len(chroms)} chromosomes")
+            for chrom, size in chroms[:5]:  # Show first 5
+                print(f"    - {chrom}: {size:.1f} Mb")
+            if len(chroms) > 5:
+                print(f"    ... and {len(chroms) - 5} more")
 
 def main():
     parser = argparse.ArgumentParser(

@@ -108,12 +108,24 @@ The tool outputs a standard BED file with the following columns:
 - Cyan line/area: K-mer variability profile
 - Title includes k-mer size for clarity
 
-#### Karyotype Plot
+#### Karyotype Plots
+
+**Standard Karyotype Plot**
 - Single image with all chromosomes arranged in grid (3 pairs per row for diploid genomes)
 - Consistent scale: 1 Mb has same width across all chromosomes
 - Natural chromosome sorting (1, 2, ..., 10, ..., 22, X, Y, MT)
 - **Diploid genome support**: For diploid assemblies, use `_mat` or `_maternal` suffix for maternal chromosomes and `_pat` or `_paternal` suffix for paternal chromosomes. These will be displayed side by side in the karyotype plot
 - Saved as `karyotype_kmer_distribution.png`
+
+**Grouped Karyotype Plot** 
+- Chromosomes grouped by size for better visibility of smaller chromosomes
+- Each size group has its own scale to ensure chromosomes fill at least 60% of plot width
+- Automatic grouping based on genome size:
+  - Large genomes: >150 Mb, 100-150 Mb, 50-100 Mb, <50 Mb
+  - Medium genomes: >100 Mb, 50-100 Mb, 25-50 Mb, <25 Mb  
+  - Small genomes: >50 Mb, 25-50 Mb, 10-25 Mb, <10 Mb
+- Chromosome sizes shown in titles
+- Saved as `grouped_karyotype_kmer_distribution.png`
 
 ## Algorithm
 
