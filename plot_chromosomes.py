@@ -149,8 +149,7 @@ def create_plotly_chromosome_plot(chrom_df, chrom, satellites, centromeres, outp
             xanchor='center'
         ),
         xaxis=dict(
-            title='Genomic position (Mb)',
-            titlefont=dict(size=14),
+            title=dict(text='Genomic position (Mb)', font=dict(size=14)),
             tickfont=dict(size=12),
             showgrid=True,
             gridcolor='lightgray',
@@ -159,8 +158,7 @@ def create_plotly_chromosome_plot(chrom_df, chrom, satellites, centromeres, outp
             fixedrange=False  # Allow zooming on X-axis
         ),
         yaxis=dict(
-            title=f'Unique {kmer_size}-mers (% of window)',
-            titlefont=dict(size=14),
+            title=dict(text=f'Unique {kmer_size}-mers (% of window)', font=dict(size=14)),
             tickfont=dict(size=12),
             showgrid=True,
             gridcolor='lightgray',
