@@ -226,6 +226,16 @@ def create_karyotype_plot(df, satellites, output_dir, kmer_size):
     elif n_cols * 2 == 1:
         axes = axes.reshape(-1, 1)
     
+    # Calculate position_mb for all chromosomes if not already present
+    if 'position_mb' not in df.columns:
+        df['position_mb'] = (df['start'] + df['end']) / 2 / 1_000_000
+    
+    # Calculate kmer_percentage if not already present
+    if 'kmer_percentage' not in df.columns:
+        df['window_size'] = df['end'] - df['start']
+        df['max_kmers'] = df['window_size'] - kmer_size + 1
+        df['kmer_percentage'] = (df['kmer_count'] / df['max_kmers']) * 100
+    
     # Find the maximum chromosome length for consistent scaling
     max_length_mb = 0
     for item in plot_items:
