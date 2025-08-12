@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import plotly.graph_objects as go
 import argparse
 import os
 import sys
@@ -78,6 +79,113 @@ def read_gff_annotations(gff_file_path, feature_type='satellite'):
     
     return annotations
 
+def create_plotly_chromosome_plot(chrom_df, chrom, satellites, centromeres, output_dir, kmer_size):
+    """
+    Create an interactive plotly plot for a single chromosome.
+    
+    Args:
+        chrom_df (DataFrame): Data for the chromosome
+        chrom (str): Chromosome name
+        satellites (dict): Satellite DNA annotations
+        centromeres (dict): Centromere annotations
+        output_dir (str): Directory for saving plots
+        kmer_size (int): Size of k-mers used in analysis
+    """
+    # Create figure
+    fig = go.Figure()
+    
+    # Add satellite DNA annotations as background shapes if available
+    if chrom in satellites:
+        for item in satellites[chrom]:
+            # Handle both old (start, end) and new (start, end, attrs) formats
+            start = item[0]
+            end = item[1] if len(item) > 1 else item[0]
+            start_mb = start / 1_000_000
+            end_mb = end / 1_000_000
+            fig.add_vrect(
+                x0=start_mb, x1=end_mb,
+                fillcolor="orange", opacity=0.15,
+                layer="below", line_width=0,
+                annotation_text="Satellite DNA" if start == satellites[chrom][0][0] else "",
+                annotation_position="top left"
+            )
+    
+    # Add centromere annotations as background shapes if available
+    if chrom in centromeres:
+        for item in centromeres[chrom]:
+            # Handle both old (start, end) and new (start, end, attrs) formats
+            start = item[0]
+            end = item[1] if len(item) > 1 else item[0]
+            start_mb = start / 1_000_000
+            end_mb = end / 1_000_000
+            fig.add_vrect(
+                x0=start_mb, x1=end_mb,
+                fillcolor="red", opacity=0.3,
+                layer="below", line_width=0,
+                annotation_text="Centromere" if start == centromeres[chrom][0][0] else "",
+                annotation_position="top right"
+            )
+    
+    # Add main k-mer distribution line and fill
+    fig.add_trace(go.Scatter(
+        x=chrom_df['position_mb'],
+        y=chrom_df['kmer_percentage'],
+        mode='lines',
+        fill='tonexty' if len(satellites.get(chrom, [])) == 0 else 'tozeroy',
+        fillcolor='rgba(0, 139, 139, 0.2)',  # darkcyan with transparency
+        line=dict(color='darkcyan', width=2),
+        name=f'Unique {kmer_size}-mers',
+        hovertemplate='<b>Position:</b> %{x:.1f} Mb<br>' +
+                      '<b>Unique k-mers:</b> %{y:.1f}%<br>' +
+                      '<extra></extra>'
+    ))
+    
+    # Update layout for better appearance
+    fig.update_layout(
+        title=dict(
+            text=f'Distribution of unique {kmer_size}-mers across chromosome {chrom}',
+            font=dict(size=18, family="Arial, sans-serif"),
+            x=0.5,
+            xanchor='center'
+        ),
+        xaxis=dict(
+            title=dict(text='Genomic position (Mb)', font=dict(size=14)),
+            tickfont=dict(size=12),
+            showgrid=True,
+            gridcolor='lightgray',
+            gridwidth=0.5,
+            range=[0, chrom_df['position_mb'].max()],
+            fixedrange=False  # Allow zooming on X-axis
+        ),
+        yaxis=dict(
+            title=dict(text=f'Unique {kmer_size}-mers (% of window)', font=dict(size=14)),
+            tickfont=dict(size=12),
+            showgrid=True,
+            gridcolor='lightgray',
+            gridwidth=0.5,
+            range=[0, 110],
+            ticksuffix='%',
+            fixedrange=True  # Lock Y-axis, no zooming allowed
+        ),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        width=1200,
+        height=500,
+        margin=dict(l=80, r=50, t=80, b=80),
+        showlegend=False,
+        hovermode='x unified',
+        dragmode='zoom'
+    )
+    
+    # Save as HTML for interactivity
+    html_filename = os.path.join(output_dir, f'{chrom}_kmer_distribution_interactive.html')
+    fig.write_html(html_filename)
+    
+    # Skip PNG export to avoid Qt issues in headless environments
+    # Users can screenshot the HTML version if needed
+    
+    return html_filename, None
+
 def plot_kmer_distribution(bed_file_path, output_dir, gff_file_path, kmer_size, centromere_gff_path=None):
     """
     Reads a BED file with k-mer counts and creates plots for each chromosome.
@@ -135,16 +243,41 @@ def plot_kmer_distribution(bed_file_path, output_dir, gff_file_path, kmer_size, 
     df['kmer_percentage'] = (df['kmer_count'] / df['max_kmers']) * 100
 
     for chrom in chromosomes:
-        print(f"Creating plot for chromosome: {chrom}...")
+        print(f"Creating plots for chromosome: {chrom}...")
         
         # Filter data for current chromosome
         chrom_df = df[df['chromosome'] == chrom].copy()
         
         # Use window midpoint for X axis and convert to megabases (Mb)
         chrom_df['position_mb'] = (chrom_df['start'] + chrom_df['end']) / 2 / 1_000_000
+        
+        # Add points at the beginning and end of chromosome for complete visualization
+        if len(chrom_df) > 0:
+            # Add point at position 0 with the same k-mer percentage as first window
+            first_row = chrom_df.iloc[0].copy()
+            first_row['position_mb'] = 0.0
+            
+            # Add point at chromosome end with the same k-mer percentage as last window
+            last_row = chrom_df.iloc[-1].copy()
+            last_row['position_mb'] = chrom_df['end'].max() / 1_000_000
+            
+            # Combine all points
+            chrom_df = pd.concat([pd.DataFrame([first_row]), chrom_df, pd.DataFrame([last_row])], ignore_index=True)
 
-        # Create plot
-        plt.style.use('seaborn-v0_8-whitegrid')
+        # Create interactive plotly plot
+        html_file, png_file = create_plotly_chromosome_plot(chrom_df, chrom, satellites, centromeres, output_dir, kmer_size)
+        print(f"  Interactive plot: {html_file}")
+        if png_file:
+            print(f"  Static plot: {png_file}")
+
+        # Also create matplotlib plot for compatibility
+        try:
+            plt.style.use('seaborn-v0_8-whitegrid')
+        except OSError:
+            try:
+                plt.style.use('seaborn-whitegrid')
+            except OSError:
+                plt.style.use('default')
         fig, ax = plt.subplots(figsize=(18, 7))
 
         # Add satellite DNA annotations as background shading if available
@@ -187,12 +320,13 @@ def plot_kmer_distribution(bed_file_path, output_dir, gff_file_path, kmer_size, 
         
         # No legend to avoid overlapping with data
 
-        # Save plot to file
-        output_filename = os.path.join(output_dir, f'{chrom}_kmer_distribution.png')
+        # Save matplotlib plot to file
+        output_filename = os.path.join(output_dir, f'{chrom}_kmer_distribution_matplotlib.png')
         plt.savefig(output_filename, dpi=200, bbox_inches='tight')
         plt.close(fig) # Close figure to free memory
 
     print(f"\nDone! All plots saved in directory '{output_dir}'.")
+    print("Interactive HTML plots can be opened in a web browser for zooming and detailed exploration.")
     
     # Create karyotype-wide plot with all chromosomes
     create_karyotype_plot(df, satellites, centromeres, output_dir, kmer_size)
