@@ -416,6 +416,43 @@ The tool displays a real-time progress bar showing:
 
 The tool will report the top 10 most frequent variants to the console and save all variants sorted by frequency to the CSV file.
 
+### Step 3: Motif-Satellite Association Analysis
+
+After discovering motif variants and annotating satellites, analyze which motifs are specific to satellite DNA:
+
+```bash
+python analyze_motif_satellites.py <motif_discovery.tsv> <satellite_annotations.tsv> -o enrichment.tsv
+```
+
+**Input files:**
+1. `motif_discovery.tsv`: Output from motif_discovery tool
+2. `satellite_annotations.tsv`: Satellite annotations with `trf_array` column containing sequences
+
+**Output columns:**
+- `motif`: Sequence variant
+- `genome_total`: Total occurrences in whole genome
+- `satellite_total`: Occurrences in satellite DNA
+- `satellite_fraction`: Proportion found in satellites (0-1)
+- `enrichment`: Classification (satellite-enriched or genome-wide)
+
+**Examples:**
+```bash
+# Basic analysis
+python analyze_motif_satellites.py cenpb_variants.tsv satellites.tsv -o cenpb_enrichment.tsv
+
+# Analyze only top 100 motifs
+python analyze_motif_satellites.py variants.tsv satellites.tsv --top-motifs 100
+
+# Include breakdown by satellite family
+python analyze_motif_satellites.py variants.tsv satellites.tsv --by-type
+```
+
+**Interpretation:**
+- **>80% in satellites**: Highly satellite-specific (likely functional)
+- **50-80% in satellites**: Moderately enriched
+- **<50% in satellites**: Genome-wide distribution
+- **0% in satellites**: Present only outside satellite DNA
+
 ## Algorithm
 
 VarProfiler uses an efficient sliding window approach:
