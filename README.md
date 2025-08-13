@@ -497,6 +497,55 @@ ATCGATCGttcgttggaaacgggaATCGATCGATCGATCGATCGttcgttggaaacggga...
 ```
 Where lowercase letters indicate motif occurrences.
 
+### Step 5: Visualize Motifs in Monomer Decomposition
+
+For detailed monomer-level analysis, visualize motifs in decomposed satellite arrays:
+
+```bash
+python visualize_motifs_in_monomers.py <monomers.tsv> <motifs.tsv> -o marked_monomers.tsv
+```
+
+**Input format (monomer TSV):**
+```
+sequence_id  orientation  index  type     length  is_flank  sequence
+chr1_array   fwd         0      MONOMER  171     FALSE     ATCG...
+chr1_array   fwd         1      MONOMER  171     FALSE     CGTA...
+```
+
+**Features:**
+- Marks motifs in each monomer/flank sequence
+- Adds `marked_sequence` column with lowercase motifs
+- Calculates per-monomer coverage statistics
+- Groups statistics by sequence type (MONOMER, LEFT_FLANK, etc.)
+- Identifies monomers with highest motif density
+
+**Examples:**
+```bash
+# Mark top 10 motifs in all monomers
+python visualize_motifs_in_monomers.py monomers.tsv motifs.tsv -o marked.tsv --top-motifs 10
+
+# Process only monomers (skip flanks)
+python visualize_motifs_in_monomers.py monomers.tsv motifs.tsv -o marked.tsv --only-monomers
+
+# Generate FASTA output with statistics
+python visualize_motifs_in_monomers.py monomers.tsv motifs.tsv -o marked.tsv --fasta marked.fa --stats stats.tsv
+
+# Filter FASTA by minimum coverage
+python visualize_motifs_in_monomers.py monomers.tsv motifs.tsv -o marked.tsv --fasta marked.fa --min-coverage 5.0
+```
+
+**Output statistics:**
+- Per-monomer motif coverage percentage
+- Total motif hits per monomer
+- Average coverage by type (MONOMER vs FLANK)
+- Top monomers by motif density
+
+This helps identify:
+- Which monomers contain functional motifs (e.g., CENP-B boxes)
+- Motif distribution patterns within arrays
+- Differences between monomers and flanking sequences
+- Evolution of motif presence/absence in tandem arrays
+
 ## Algorithm
 
 VarProfiler uses an efficient sliding window approach:
