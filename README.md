@@ -380,7 +380,8 @@ For non-human genomes or to refine the CENP-B box consensus, use the motif disco
 
 **Output TSV columns:**
 - `motif`: Discovered sequence variant
-- `edit_distance`: Distance from reference motif
+- `alignment`: Visual alignment showing differences (`.` for match, letter for mismatch)
+- `edit_distance`: Hamming distance from reference motif
 - `cigar`: CIGAR string showing alignment to reference (M=match, X=mismatch)
 - `count_forward`: Occurrences on forward strand
 - `count_reverse`: Occurrences on reverse strand

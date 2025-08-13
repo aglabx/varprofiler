@@ -34,6 +34,7 @@ const std::unordered_map<char, std::string> IUPAC_CODES = {
 // Structure to hold motif variant statistics
 struct MotifStats {
     std::string sequence;
+    std::string alignment;  // Visual alignment (dots for matches)
     int edit_distance;
     std::string cigar;  // CIGAR string for alignment
     size_t count_forward = 0;
@@ -119,26 +120,41 @@ std::string reverse_complement(const std::string& seq) {
     return rc;
 }
 
-// Generate CIGAR string and calculate edit distance
-std::pair<int, std::string> align_and_distance(const std::string& ref, const std::string& query) {
+// Structure to hold alignment result
+struct AlignmentResult {
+    int edit_distance;
+    std::string cigar;
+    std::string visual_alignment;
+};
+
+// Calculate true edit distance with indels using dynamic programming
+AlignmentResult align_sequences(const std::string& ref, const std::string& query, int) {
     int m = ref.length();
     int n = query.length();
     
-    if (m != n) return {-1, ""}; // Only handle equal length for this application
+    // For now, we only handle equal length sequences (no indels)
+    // This is appropriate for CENP-B boxes which have fixed length
+    if (m != n) {
+        return {-1, "", ""};
+    }
     
+    // Calculate Hamming distance for equal-length sequences
     int distance = 0;
     std::string cigar;
+    std::string visual;
     int match_count = 0;
     
     for (int i = 0; i < m; ++i) {
         if (toupper(ref[i]) == toupper(query[i])) {
             match_count++;
+            visual += '.';  // Dot for match
         } else {
             if (match_count > 0) {
                 cigar += std::to_string(match_count) + "M";
                 match_count = 0;
             }
             cigar += "1X";  // X for mismatch
+            visual += toupper(query[i]);  // Show the differing base
             distance++;
         }
     }
@@ -151,9 +167,40 @@ std::pair<int, std::string> align_and_distance(const std::string& ref, const std
     // If perfect match, use simple CIGAR
     if (distance == 0) {
         cigar = std::to_string(m) + "M";
+        visual = std::string(m, '.');
     }
     
-    return {distance, cigar};
+    return {distance, cigar, visual};
+}
+
+// Full edit distance with indels (Levenshtein distance)
+int levenshtein_distance(const std::string& s1, const std::string& s2) {
+    int m = s1.length();
+    int n = s2.length();
+    
+    // Create DP table
+    std::vector<std::vector<int>> dp(m + 1, std::vector<int>(n + 1));
+    
+    // Initialize first row and column
+    for (int i = 0; i <= m; i++) dp[i][0] = i;
+    for (int j = 0; j <= n; j++) dp[0][j] = j;
+    
+    // Fill DP table
+    for (int i = 1; i <= m; i++) {
+        for (int j = 1; j <= n; j++) {
+            if (toupper(s1[i-1]) == toupper(s2[j-1])) {
+                dp[i][j] = dp[i-1][j-1];  // Match
+            } else {
+                dp[i][j] = 1 + std::min({
+                    dp[i-1][j],    // Deletion
+                    dp[i][j-1],    // Insertion
+                    dp[i-1][j-1]   // Substitution
+                });
+            }
+        }
+    }
+    
+    return dp[m][n];
 }
 
 // Expand IUPAC pattern to all possible sequences
@@ -203,11 +250,13 @@ void process_sequence(const std::string& seq, const std::vector<std::string>& ex
         // Check against all expanded patterns
         int min_dist = max_distance + 1;
         std::string best_cigar;
+        std::string best_visual;
         for (const auto& pattern : expanded_patterns) {
-            auto [dist, cigar] = align_and_distance(pattern, window);
-            if (dist >= 0 && dist < min_dist) {
-                min_dist = dist;
-                best_cigar = cigar;
+            auto result = align_sequences(pattern, window, max_distance);
+            if (result.edit_distance >= 0 && result.edit_distance < min_dist) {
+                min_dist = result.edit_distance;
+                best_cigar = result.cigar;
+                best_visual = result.visual_alignment;
             }
         }
         
@@ -215,6 +264,7 @@ void process_sequence(const std::string& seq, const std::vector<std::string>& ex
         if (min_dist <= max_distance) {
             if (local_stats.find(window) == local_stats.end()) {
                 local_stats[window].sequence = window;
+                local_stats[window].alignment = best_visual;
                 local_stats[window].edit_distance = min_dist;
                 local_stats[window].cigar = best_cigar;
             }
@@ -314,7 +364,7 @@ void write_tsv(const std::string& filename, const std::map<std::string, MotifSta
     }
     
     // Write header
-    out << "motif\tedit_distance\tcigar\tcount_forward\tcount_reverse\tcount_total\tfreq_forward\tfreq_reverse\tfreq_total\n";
+    out << "motif\talignment\tedit_distance\tcigar\tcount_forward\tcount_reverse\tcount_total\tfreq_forward\tfreq_reverse\tfreq_total\n";
     
     // Calculate total counts for frequency calculation
     size_t total_forward = 0, total_reverse = 0;
@@ -335,6 +385,7 @@ void write_tsv(const std::string& filename, const std::map<std::string, MotifSta
         double freq_total = (total_all > 0) ? (100.0 * total / total_all) : 0;
         
         out << seq << "\t"
+            << stat.alignment << "\t"
             << stat.edit_distance << "\t"
             << stat.cigar << "\t"
             << stat.count_forward << "\t"
@@ -350,11 +401,12 @@ void write_tsv(const std::string& filename, const std::map<std::string, MotifSta
     
     std::cout << "\nTop 10 most frequent variants:\n";
     std::cout << std::setw(20) << "Motif" 
-              << std::setw(10) << "Distance"
-              << std::setw(15) << "CIGAR"
-              << std::setw(15) << "Total Count"
-              << std::setw(15) << "Frequency (%)\n";
-    std::cout << std::string(75, '-') << "\n";
+              << "  " << std::setw(20) << "Alignment"
+              << "  " << std::setw(8) << "Distance"
+              << "  " << std::setw(20) << "CIGAR"
+              << "  " << std::setw(12) << "Total Count"
+              << "  " << std::setw(12) << "Frequency (%)\n";
+    std::cout << std::string(110, '-') << "\n";
     
     int count = 0;
     for (const auto& pair : sorted_stats) {
@@ -364,10 +416,11 @@ void write_tsv(const std::string& filename, const std::map<std::string, MotifSta
         double freq = (total_all > 0) ? (100.0 * total / total_all) : 0;
         
         std::cout << std::setw(20) << pair.first
-                  << std::setw(10) << pair.second.edit_distance
-                  << std::setw(15) << pair.second.cigar
-                  << std::setw(15) << total
-                  << std::setw(15) << std::fixed << std::setprecision(2) << freq << "\n";
+                  << "  " << std::setw(20) << pair.second.alignment
+                  << "  " << std::setw(8) << pair.second.edit_distance
+                  << "  " << std::setw(20) << pair.second.cigar
+                  << "  " << std::setw(12) << total
+                  << "  " << std::setw(12) << std::fixed << std::setprecision(2) << freq << "\n";
     }
 }
 
@@ -382,7 +435,8 @@ void print_usage(const char* program_name) {
     std::cerr << "  output.tsv     Output TSV file with variant statistics\n\n";
     std::cerr << "Output columns:\n";
     std::cerr << "  motif          Discovered sequence variant\n";
-    std::cerr << "  edit_distance  Distance from reference motif\n";
+    std::cerr << "  alignment      Visual alignment (. for match, letter for mismatch)\n";
+    std::cerr << "  edit_distance  Hamming distance from reference motif\n";
     std::cerr << "  cigar          CIGAR string showing alignment\n";
     std::cerr << "  count_*        Occurrence counts\n";
     std::cerr << "  freq_*         Percentage frequencies\n\n";
