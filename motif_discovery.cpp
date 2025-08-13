@@ -20,6 +20,8 @@
 #include <iomanip>
 #include <queue>
 #include <set>
+#include <atomic>
+#include <chrono>
 
 // IUPAC nucleotide codes
 const std::unordered_map<char, std::string> IUPAC_CODES = {
@@ -33,6 +35,7 @@ const std::unordered_map<char, std::string> IUPAC_CODES = {
 struct MotifStats {
     std::string sequence;
     int edit_distance;
+    std::string cigar;  // CIGAR string for alignment
     size_t count_forward = 0;
     size_t count_reverse = 0;
     size_t count_total = 0;
@@ -40,9 +43,65 @@ struct MotifStats {
 
 // Mutex for thread-safe updates
 std::mutex stats_mutex;
+std::mutex progress_mutex;
 
 // Global map to store all discovered variants
 std::map<std::string, MotifStats> global_stats;
+
+// Progress tracking
+std::atomic<size_t> bases_processed(0);
+size_t total_bases = 0;
+
+// Display progress bar
+void show_progress() {
+    const int bar_width = 50;
+    auto start_time = std::chrono::steady_clock::now();
+    
+    while (bases_processed < total_bases) {
+        size_t current = bases_processed.load();
+        double progress = (total_bases > 0) ? (double)current / total_bases : 0;
+        
+        // Calculate elapsed time and estimate remaining
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+        int eta = (progress > 0) ? (int)(elapsed / progress - elapsed) : 0;
+        
+        // Create progress bar
+        std::cout << "\r[";
+        int pos = bar_width * progress;
+        for (int i = 0; i < bar_width; ++i) {
+            if (i < pos) std::cout << "=";
+            else if (i == pos) std::cout << ">";
+            else std::cout << " ";
+        }
+        
+        // Show percentage and stats
+        std::cout << "] " << std::fixed << std::setprecision(1) 
+                  << (progress * 100.0) << "% "
+                  << "(" << (current / 1000000) << "/" << (total_bases / 1000000) << " Mb) ";
+        
+        if (elapsed > 0 && progress > 0.01) {
+            std::cout << "ETA: ";
+            if (eta >= 3600) {
+                std::cout << (eta / 3600) << "h " << ((eta % 3600) / 60) << "m";
+            } else if (eta >= 60) {
+                std::cout << (eta / 60) << "m " << (eta % 60) << "s";
+            } else {
+                std::cout << eta << "s";
+            }
+        }
+        
+        std::cout << "    " << std::flush;
+        
+        if (current >= total_bases) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    
+    // Final update
+    std::cout << "\r[";
+    for (int i = 0; i < bar_width; ++i) std::cout << "=";
+    std::cout << "] 100.0% (" << (total_bases / 1000000) << "/" << (total_bases / 1000000) << " Mb) Done!        \n";
+}
 
 // Reverse complement of DNA sequence
 std::string reverse_complement(const std::string& seq) {
@@ -60,20 +119,41 @@ std::string reverse_complement(const std::string& seq) {
     return rc;
 }
 
-// Calculate edit distance using dynamic programming
-int edit_distance(const std::string& s1, const std::string& s2) {
-    int m = s1.length();
-    int n = s2.length();
+// Generate CIGAR string and calculate edit distance
+std::pair<int, std::string> align_and_distance(const std::string& ref, const std::string& query) {
+    int m = ref.length();
+    int n = query.length();
     
-    if (m != n) return -1; // Only handle equal length for this application
+    if (m != n) return {-1, ""}; // Only handle equal length for this application
     
     int distance = 0;
+    std::string cigar;
+    int match_count = 0;
+    
     for (int i = 0; i < m; ++i) {
-        if (toupper(s1[i]) != toupper(s2[i])) {
+        if (toupper(ref[i]) == toupper(query[i])) {
+            match_count++;
+        } else {
+            if (match_count > 0) {
+                cigar += std::to_string(match_count) + "M";
+                match_count = 0;
+            }
+            cigar += "1X";  // X for mismatch
             distance++;
         }
     }
-    return distance;
+    
+    // Add final matches
+    if (match_count > 0) {
+        cigar += std::to_string(match_count) + "M";
+    }
+    
+    // If perfect match, use simple CIGAR
+    if (distance == 0) {
+        cigar = std::to_string(m) + "M";
+    }
+    
+    return {distance, cigar};
 }
 
 // Expand IUPAC pattern to all possible sequences
@@ -106,6 +186,10 @@ void process_sequence(const std::string& seq, const std::vector<std::string>& ex
     
     // Slide through the sequence
     for (size_t i = 0; i <= seq.length() - pattern_len; ++i) {
+        // Update progress every 10000 bases
+        if (i % 10000 == 0) {
+            bases_processed.fetch_add(10000);
+        }
         std::string window = seq.substr(i, pattern_len);
         
         // Skip windows with N
@@ -118,10 +202,12 @@ void process_sequence(const std::string& seq, const std::vector<std::string>& ex
         
         // Check against all expanded patterns
         int min_dist = max_distance + 1;
+        std::string best_cigar;
         for (const auto& pattern : expanded_patterns) {
-            int dist = edit_distance(window, pattern);
+            auto [dist, cigar] = align_and_distance(pattern, window);
             if (dist >= 0 && dist < min_dist) {
                 min_dist = dist;
+                best_cigar = cigar;
             }
         }
         
@@ -130,6 +216,7 @@ void process_sequence(const std::string& seq, const std::vector<std::string>& ex
             if (local_stats.find(window) == local_stats.end()) {
                 local_stats[window].sequence = window;
                 local_stats[window].edit_distance = min_dist;
+                local_stats[window].cigar = best_cigar;
             }
             
             if (count_reverse) {
@@ -139,6 +226,9 @@ void process_sequence(const std::string& seq, const std::vector<std::string>& ex
             }
         }
     }
+    
+    // Update final progress for this sequence
+    bases_processed.fetch_add(seq.length() % 10000);
     
     // Merge local stats into global
     std::lock_guard<std::mutex> lock(stats_mutex);
@@ -151,6 +241,7 @@ void process_sequence(const std::string& seq, const std::vector<std::string>& ex
         } else {
             global_stats[seq].count_forward += stats.count_forward;
             global_stats[seq].count_reverse += stats.count_reverse;
+            // CIGAR and edit_distance should already be the same for same sequence
         }
     }
 }
@@ -204,8 +295,8 @@ std::vector<std::pair<std::string, std::string>> read_fasta(const std::string& f
     return sequences;
 }
 
-// Write results to CSV
-void write_csv(const std::string& filename, const std::map<std::string, MotifStats>& stats) {
+// Write results to TSV
+void write_tsv(const std::string& filename, const std::map<std::string, MotifStats>& stats) {
     
     // Sort by total count (descending)
     std::vector<std::pair<std::string, MotifStats>> sorted_stats(stats.begin(), stats.end());
@@ -223,7 +314,7 @@ void write_csv(const std::string& filename, const std::map<std::string, MotifSta
     }
     
     // Write header
-    out << "motif,edit_distance,count_forward,count_reverse,count_total,freq_forward,freq_reverse,freq_total\n";
+    out << "motif\tedit_distance\tcigar\tcount_forward\tcount_reverse\tcount_total\tfreq_forward\tfreq_reverse\tfreq_total\n";
     
     // Calculate total counts for frequency calculation
     size_t total_forward = 0, total_reverse = 0;
@@ -243,14 +334,15 @@ void write_csv(const std::string& filename, const std::map<std::string, MotifSta
         double freq_reverse = (total_reverse > 0) ? (100.0 * stat.count_reverse / total_reverse) : 0;
         double freq_total = (total_all > 0) ? (100.0 * total / total_all) : 0;
         
-        out << seq << ","
-            << stat.edit_distance << ","
-            << stat.count_forward << ","
-            << stat.count_reverse << ","
-            << total << ","
+        out << seq << "\t"
+            << stat.edit_distance << "\t"
+            << stat.cigar << "\t"
+            << stat.count_forward << "\t"
+            << stat.count_reverse << "\t"
+            << total << "\t"
             << std::fixed << std::setprecision(4)
-            << freq_forward << ","
-            << freq_reverse << ","
+            << freq_forward << "\t"
+            << freq_reverse << "\t"
             << freq_total << "\n";
     }
     
@@ -259,9 +351,10 @@ void write_csv(const std::string& filename, const std::map<std::string, MotifSta
     std::cout << "\nTop 10 most frequent variants:\n";
     std::cout << std::setw(20) << "Motif" 
               << std::setw(10) << "Distance"
+              << std::setw(15) << "CIGAR"
               << std::setw(15) << "Total Count"
               << std::setw(15) << "Frequency (%)\n";
-    std::cout << std::string(60, '-') << "\n";
+    std::cout << std::string(75, '-') << "\n";
     
     int count = 0;
     for (const auto& pair : sorted_stats) {
@@ -272,22 +365,29 @@ void write_csv(const std::string& filename, const std::map<std::string, MotifSta
         
         std::cout << std::setw(20) << pair.first
                   << std::setw(10) << pair.second.edit_distance
+                  << std::setw(15) << pair.second.cigar
                   << std::setw(15) << total
                   << std::setw(15) << std::fixed << std::setprecision(2) << freq << "\n";
     }
 }
 
 void print_usage(const char* program_name) {
-    std::cerr << "Usage: " << program_name << " <genome.fasta> <motif> <max_distance> <threads> <output.csv>\n\n";
+    std::cerr << "Usage: " << program_name << " <genome.fasta> <motif> <max_distance> <threads> <output.tsv>\n\n";
     std::cerr << "Discover all motif variants within edit distance and report their frequencies.\n\n";
     std::cerr << "Arguments:\n";
     std::cerr << "  genome.fasta   Input genome in FASTA format\n";
     std::cerr << "  motif          Reference motif (supports IUPAC codes)\n";
     std::cerr << "  max_distance   Maximum edit distance from reference\n";
     std::cerr << "  threads        Number of threads to use\n";
-    std::cerr << "  output.csv     Output CSV file with variant statistics\n\n";
+    std::cerr << "  output.tsv     Output TSV file with variant statistics\n\n";
+    std::cerr << "Output columns:\n";
+    std::cerr << "  motif          Discovered sequence variant\n";
+    std::cerr << "  edit_distance  Distance from reference motif\n";
+    std::cerr << "  cigar          CIGAR string showing alignment\n";
+    std::cerr << "  count_*        Occurrence counts\n";
+    std::cerr << "  freq_*         Percentage frequencies\n\n";
     std::cerr << "Example:\n";
-    std::cerr << "  " << program_name << " genome.fa YTTCGTTGGAARCGGGA 3 8 cenpb_variants.csv\n";
+    std::cerr << "  " << program_name << " genome.fa YTTCGTTGGAARCGGGA 3 8 cenpb_variants.tsv\n";
 }
 
 int main(int argc, char* argv[]) {
@@ -339,8 +439,15 @@ int main(int argc, char* argv[]) {
     }
     std::cout << "Total genome size: " << (genome_size / 1000000) << " Mb\n\n";
     
+    // Initialize progress tracking
+    total_bases = genome_size * 2;  // Forward and reverse strands
+    bases_processed = 0;
+    
     // Process sequences in parallel
     std::cout << "Searching for motif variants...\n";
+    
+    // Start progress bar thread
+    std::thread progress_thread(show_progress);
     
     // Divide work among threads
     size_t chunk_size = (sequences.size() + num_threads - 1) / num_threads;
@@ -364,6 +471,10 @@ int main(int argc, char* argv[]) {
         t.join();
     }
     
+    // Mark as complete and wait for progress bar
+    bases_processed = total_bases;
+    progress_thread.join();
+    
     // Calculate total counts for all variants
     for (auto& pair : global_stats) {
         pair.second.count_total = pair.second.count_forward + pair.second.count_reverse;
@@ -373,7 +484,7 @@ int main(int argc, char* argv[]) {
     
     // Write results
     std::cout << "Writing results to " << output_file << "...\n";
-    write_csv(output_file, global_stats);
+    write_tsv(output_file, global_stats);
     
     std::cout << "\nDone!\n";
     

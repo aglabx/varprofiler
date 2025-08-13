@@ -368,7 +368,7 @@ The CENP-B box count and density are included in the GFF annotations and help co
 For non-human genomes or to refine the CENP-B box consensus, use the motif discovery tool:
 
 ```bash
-./motif_discovery <genome.fasta> <motif> <max_distance> <threads> <output.csv>
+./motif_discovery <genome.fasta> <motif> <max_distance> <threads> <output.tsv>
 ```
 
 **Parameters:**
@@ -376,11 +376,12 @@ For non-human genomes or to refine the CENP-B box consensus, use the motif disco
 - `motif`: Reference motif with IUPAC codes (e.g., YTTCGTTGGAARCGGGA)
 - `max_distance`: Maximum edit distance (0-10)
 - `threads`: Number of parallel threads
-- `output.csv`: Output CSV with variant statistics
+- `output.tsv`: Output TSV with variant statistics
 
-**Output CSV columns:**
+**Output TSV columns:**
 - `motif`: Discovered sequence variant
 - `edit_distance`: Distance from reference motif
+- `cigar`: CIGAR string showing alignment to reference (M=match, X=mismatch)
 - `count_forward`: Occurrences on forward strand
 - `count_reverse`: Occurrences on reverse strand
 - `count_total`: Total occurrences
@@ -391,14 +392,20 @@ For non-human genomes or to refine the CENP-B box consensus, use the motif disco
 **Examples:**
 ```bash
 # Discover CENP-B variants in human genome
-./motif_discovery human.fa YTTCGTTGGAARCGGGA 3 8 cenpb_variants.csv
+./motif_discovery human.fa YTTCGTTGGAARCGGGA 3 8 cenpb_variants.tsv
 
 # Search for variants in mouse genome with relaxed threshold
-./motif_discovery mouse.fa YTTCGTTGGAWRCGGGA 4 16 mouse_cenpb.csv
+./motif_discovery mouse.fa YTTCGTTGGAWRCGGGA 4 16 mouse_cenpb.tsv
 
 # Find exact matches only
-./motif_discovery genome.fa TTCGTTGGAAACGGGA 0 4 exact_matches.csv
+./motif_discovery genome.fa TTCGTTGGAAACGGGA 0 4 exact_matches.tsv
 ```
+
+**Progress tracking:**
+The tool displays a real-time progress bar showing:
+- Percentage completed
+- Megabases processed/total
+- Estimated time remaining (ETA)
 
 **Use cases:**
 1. **Species-specific optimization**: Find the most common CENP-B variant in your species
