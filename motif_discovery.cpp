@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <map>
 #include <algorithm>
 #include <thread>
@@ -22,6 +23,7 @@
 #include <set>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 
 // IUPAC nucleotide codes
 const std::unordered_map<char, std::string> IUPAC_CODES = {
@@ -137,32 +139,80 @@ AlignmentResult align_sequences(const std::string& ref, const std::string& query
         return {abs(m - n), "", ""};
     }
     
-    // DP table for edit distance
-    std::vector<std::vector<int>> dp(m + 1, std::vector<int>(n + 1));
+    // OPTIMIZATION 1: Banded DP - only compute cells within max_dist of diagonal
+    // This reduces complexity from O(m*n) to O(m*max_dist)
+    
+    // Use single row DP for space optimization when we only need distance
+    if (m == n && max_dist <= 3) {
+        // OPTIMIZATION 2: For small distances and equal lengths, use bit-parallel approach
+        // This is much faster for Hamming distance
+        int hamming = 0;
+        for (int i = 0; i < m; i++) {
+            if (toupper(ref[i]) != toupper(query[i])) hamming++;
+            if (hamming > max_dist) return {hamming, "", ""};  // Early termination
+        }
+        // Only build alignment if within threshold
+        if (hamming <= max_dist) {
+            // Fast path for equal length - build CIGAR and visual
+            std::string cigar, visual;
+            int match_count = 0;
+            for (int i = 0; i < m; i++) {
+                if (toupper(ref[i]) == toupper(query[i])) {
+                    match_count++;
+                    visual += '.';
+                } else {
+                    if (match_count > 0) {
+                        cigar += std::to_string(match_count) + "M";
+                        match_count = 0;
+                    }
+                    cigar += "1X";
+                    visual += toupper(query[i]);
+                }
+            }
+            if (match_count > 0) cigar += std::to_string(match_count) + "M";
+            return {hamming, cigar, visual};
+        }
+        return {hamming, "", ""};
+    }
+    
+    // Full DP for unequal lengths or large distances
+    // OPTIMIZATION 3: Use Ukkonen's cutoff - stop if we exceed max_dist
+    std::vector<std::vector<int>> dp(m + 1, std::vector<int>(n + 1, max_dist + 1));
     
     // Initialize first row and column
-    for (int i = 0; i <= m; i++) dp[i][0] = i;
-    for (int j = 0; j <= n; j++) dp[0][j] = j;
+    for (int i = 0; i <= m && i <= max_dist; i++) dp[i][0] = i;
+    for (int j = 0; j <= n && j <= max_dist; j++) dp[0][j] = j;
     
-    // Fill DP table
+    // Fill DP table with banded optimization
+    bool exceeded = false;
     for (int i = 1; i <= m; i++) {
-        for (int j = 1; j <= n; j++) {
+        int start_j = std::max(1, i - max_dist);
+        int end_j = std::min(n, i + max_dist);
+        bool row_exceeded = true;
+        
+        for (int j = start_j; j <= end_j; j++) {
             if (toupper(ref[i-1]) == toupper(query[j-1])) {
                 dp[i][j] = dp[i-1][j-1];  // Match
             } else {
-                dp[i][j] = 1 + std::min({
-                    dp[i-1][j],    // Deletion from ref
-                    dp[i][j-1],    // Insertion to ref
-                    dp[i-1][j-1]   // Substitution
-                });
+                int del = (j > 1 && i - j + 1 <= max_dist) ? dp[i-1][j] : max_dist + 1;
+                int ins = (i > 1 && j - i + 1 <= max_dist) ? dp[i][j-1] : max_dist + 1;
+                int sub = dp[i-1][j-1];
+                dp[i][j] = 1 + std::min({del, ins, sub});
             }
+            if (dp[i][j] <= max_dist) row_exceeded = false;
+        }
+        
+        // Early termination if entire row exceeds max_dist
+        if (row_exceeded && i > max_dist) {
+            exceeded = true;
+            break;
         }
     }
     
     int edit_dist = dp[m][n];
     
     // Early exit if distance too large
-    if (edit_dist > max_dist) {
+    if (edit_dist > max_dist || exceeded) {
         return {edit_dist, "", ""};
     }
     
@@ -284,63 +334,145 @@ void process_sequence(const std::string& seq, const std::vector<std::string>& ex
     std::map<std::string, MotifStats> local_stats;
     int pattern_len = expanded_patterns[0].length();
     
-    // Slide through the sequence with different window sizes for indels
-    // Try exact length matches first (most common)
+    // OPTIMIZATION 4: Pre-filter using rolling hash for exact matches
+    // This avoids expensive edit distance calculations for most windows
+    std::unordered_set<uint64_t> pattern_hashes;
+    for (const auto& pattern : expanded_patterns) {
+        uint64_t hash = 0;
+        for (char c : pattern) {
+            hash = hash * 31 + toupper(c);
+        }
+        pattern_hashes.insert(hash);
+    }
+    
+    // Slide through the sequence
     for (size_t i = 0; i <= seq.length() - pattern_len; ++i) {
         // Update progress every 10000 bases
         if (i % 10000 == 0) {
             bases_processed.fetch_add(10000);
         }
         
-        // Try windows of different lengths (pattern_len +/- max_distance)
-        for (int len_diff = -max_distance; len_diff <= max_distance; len_diff++) {
-            int window_len = pattern_len + len_diff;
+        // OPTIMIZATION 5: Check exact length first (most common case)
+        // This avoids checking all length variations when not needed
+        bool found_match = false;
+        
+        // Try exact length match first
+        if (i + pattern_len <= seq.length()) {
+            std::string window = seq.substr(i, pattern_len);
             
-            // Skip invalid window lengths
-            if (window_len < 1 || i + window_len > seq.length()) {
-                continue;
-            }
-            
-            std::string window = seq.substr(i, window_len);
-            
-            // Skip windows with N
-            if (window.find('N') != std::string::npos || window.find('n') != std::string::npos) {
-                continue;
-            }
-            
-            // Convert to uppercase for comparison
-            std::transform(window.begin(), window.end(), window.begin(), ::toupper);
-            
-            // Check against all expanded patterns
-            int min_dist = max_distance + 1;
-            std::string best_cigar;
-            std::string best_visual;
-            for (const auto& pattern : expanded_patterns) {
-                auto result = align_sequences(pattern, window, max_distance);
-                if (result.edit_distance >= 0 && result.edit_distance <= max_distance && result.edit_distance < min_dist) {
-                    min_dist = result.edit_distance;
-                    best_cigar = result.cigar;
-                    best_visual = result.visual_alignment;
+            // Quick N check
+            bool has_n = false;
+            for (char c : window) {
+                if (c == 'N' || c == 'n') {
+                    has_n = true;
+                    break;
                 }
             }
-            
-            // If within threshold, record it
-            if (min_dist <= max_distance) {
-                if (local_stats.find(window) == local_stats.end()) {
-                    local_stats[window].sequence = window;
-                    local_stats[window].alignment = best_visual;
-                    local_stats[window].edit_distance = min_dist;
-                    local_stats[window].cigar = best_cigar;
+            if (!has_n) {
+                // Convert to uppercase for comparison
+                std::transform(window.begin(), window.end(), window.begin(), ::toupper);
+                
+                // OPTIMIZATION 6: Check hash first for exact matches
+                uint64_t window_hash = 0;
+                for (char c : window) {
+                    window_hash = window_hash * 31 + c;
                 }
                 
-                if (count_reverse) {
-                    local_stats[window].count_reverse++;
+                // Quick exact match check
+                if (pattern_hashes.count(window_hash)) {
+                    // Exact match found
+                    if (local_stats.find(window) == local_stats.end()) {
+                        local_stats[window].sequence = window;
+                        local_stats[window].alignment = std::string(pattern_len, '.');
+                        local_stats[window].edit_distance = 0;
+                        local_stats[window].cigar = std::to_string(pattern_len) + "M";
+                    }
+                    if (count_reverse) {
+                        local_stats[window].count_reverse++;
+                    } else {
+                        local_stats[window].count_forward++;
+                    }
+                    found_match = true;
                 } else {
-                    local_stats[window].count_forward++;
+                    // Not exact match, try edit distance
+                    int min_dist = max_distance + 1;
+                    std::string best_cigar;
+                    std::string best_visual;
+                    
+                    for (const auto& pattern : expanded_patterns) {
+                        auto result = align_sequences(pattern, window, max_distance);
+                        if (result.edit_distance >= 0 && result.edit_distance <= max_distance && result.edit_distance < min_dist) {
+                            min_dist = result.edit_distance;
+                            best_cigar = result.cigar;
+                            best_visual = result.visual_alignment;
+                        }
+                    }
+                    
+                    if (min_dist <= max_distance) {
+                        if (local_stats.find(window) == local_stats.end()) {
+                            local_stats[window].sequence = window;
+                            local_stats[window].alignment = best_visual;
+                            local_stats[window].edit_distance = min_dist;
+                            local_stats[window].cigar = best_cigar;
+                        }
+                        if (count_reverse) {
+                            local_stats[window].count_reverse++;
+                        } else {
+                            local_stats[window].count_forward++;
+                        }
+                        found_match = true;
+                    }
+                }
+            }
+        }
+        
+        // Only try different lengths if exact length didn't match and we allow indels
+        if (!found_match && max_distance > 0) {
+            // Try other lengths (skip len_diff = 0 as we already tried it)
+            for (int len_diff = -max_distance; len_diff <= max_distance; len_diff++) {
+                if (len_diff == 0) continue;  // Already tried
+                
+                int window_len = pattern_len + len_diff;
+                if (window_len < 1 || i + window_len > seq.length()) {
+                    continue;
                 }
                 
-                // Don't count overlapping indel variants from same position
-                break;
+                std::string window = seq.substr(i, window_len);
+                
+                // Quick N check
+                if (window.find('N') != std::string::npos || window.find('n') != std::string::npos) {
+                    continue;
+                }
+                
+                std::transform(window.begin(), window.end(), window.begin(), ::toupper);
+                
+                int min_dist = max_distance + 1;
+                std::string best_cigar;
+                std::string best_visual;
+                
+                for (const auto& pattern : expanded_patterns) {
+                    auto result = align_sequences(pattern, window, max_distance);
+                    if (result.edit_distance >= 0 && result.edit_distance <= max_distance && result.edit_distance < min_dist) {
+                        min_dist = result.edit_distance;
+                        best_cigar = result.cigar;
+                        best_visual = result.visual_alignment;
+                    }
+                }
+                
+                if (min_dist <= max_distance) {
+                    if (local_stats.find(window) == local_stats.end()) {
+                        local_stats[window].sequence = window;
+                        local_stats[window].alignment = best_visual;
+                        local_stats[window].edit_distance = min_dist;
+                        local_stats[window].cigar = best_cigar;
+                    }
+                    if (count_reverse) {
+                        local_stats[window].count_reverse++;
+                    } else {
+                        local_stats[window].count_forward++;
+                    }
+                    break;  // Don't count overlapping variants
+                }
             }
         }
     }
