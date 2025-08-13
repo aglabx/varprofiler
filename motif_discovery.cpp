@@ -127,50 +127,103 @@ struct AlignmentResult {
     std::string visual_alignment;
 };
 
-// Calculate true edit distance with indels using dynamic programming
-AlignmentResult align_sequences(const std::string& ref, const std::string& query, int) {
+// Calculate edit distance with full alignment (including indels)
+AlignmentResult align_sequences(const std::string& ref, const std::string& query, int max_dist) {
     int m = ref.length();
     int n = query.length();
     
-    // For now, we only handle equal length sequences (no indels)
-    // This is appropriate for CENP-B boxes which have fixed length
-    if (m != n) {
-        return {-1, "", ""};
+    // Quick check: if length difference exceeds max_dist, skip
+    if (abs(m - n) > max_dist) {
+        return {abs(m - n), "", ""};
     }
     
-    // Calculate Hamming distance for equal-length sequences
-    int distance = 0;
-    std::string cigar;
-    std::string visual;
-    int match_count = 0;
+    // DP table for edit distance
+    std::vector<std::vector<int>> dp(m + 1, std::vector<int>(n + 1));
     
-    for (int i = 0; i < m; ++i) {
-        if (toupper(ref[i]) == toupper(query[i])) {
-            match_count++;
-            visual += '.';  // Dot for match
-        } else {
-            if (match_count > 0) {
-                cigar += std::to_string(match_count) + "M";
-                match_count = 0;
+    // Initialize first row and column
+    for (int i = 0; i <= m; i++) dp[i][0] = i;
+    for (int j = 0; j <= n; j++) dp[0][j] = j;
+    
+    // Fill DP table
+    for (int i = 1; i <= m; i++) {
+        for (int j = 1; j <= n; j++) {
+            if (toupper(ref[i-1]) == toupper(query[j-1])) {
+                dp[i][j] = dp[i-1][j-1];  // Match
+            } else {
+                dp[i][j] = 1 + std::min({
+                    dp[i-1][j],    // Deletion from ref
+                    dp[i][j-1],    // Insertion to ref
+                    dp[i-1][j-1]   // Substitution
+                });
             }
-            cigar += "1X";  // X for mismatch
-            visual += toupper(query[i]);  // Show the differing base
-            distance++;
         }
     }
     
-    // Add final matches
-    if (match_count > 0) {
-        cigar += std::to_string(match_count) + "M";
+    int edit_dist = dp[m][n];
+    
+    // Early exit if distance too large
+    if (edit_dist > max_dist) {
+        return {edit_dist, "", ""};
     }
     
-    // If perfect match, use simple CIGAR
-    if (distance == 0) {
-        cigar = std::to_string(m) + "M";
-        visual = std::string(m, '.');
+    // Backtrack to build CIGAR and visual alignment
+    std::string cigar;
+    std::string visual;
+    std::vector<char> cigar_ops;
+    std::vector<char> visual_chars;
+    
+    int i = m, j = n;
+    while (i > 0 || j > 0) {
+        if (i > 0 && j > 0 && toupper(ref[i-1]) == toupper(query[j-1])) {
+            // Match
+            cigar_ops.push_back('M');
+            visual_chars.push_back('.');
+            i--; j--;
+        } else if (i > 0 && j > 0 && dp[i][j] == dp[i-1][j-1] + 1) {
+            // Substitution
+            cigar_ops.push_back('X');
+            visual_chars.push_back(toupper(query[j-1]));
+            i--; j--;
+        } else if (j > 0 && dp[i][j] == dp[i][j-1] + 1) {
+            // Insertion
+            cigar_ops.push_back('I');
+            visual_chars.push_back(toupper(query[j-1]));
+            j--;
+        } else if (i > 0 && dp[i][j] == dp[i-1][j] + 1) {
+            // Deletion
+            cigar_ops.push_back('D');
+            visual_chars.push_back('-');
+            i--;
+        }
     }
     
-    return {distance, cigar, visual};
+    // Reverse to get correct order
+    std::reverse(cigar_ops.begin(), cigar_ops.end());
+    std::reverse(visual_chars.begin(), visual_chars.end());
+    
+    // Build CIGAR string
+    if (!cigar_ops.empty()) {
+        char current_op = cigar_ops[0];
+        int count = 1;
+        
+        for (size_t k = 1; k < cigar_ops.size(); k++) {
+            if (cigar_ops[k] == current_op) {
+                count++;
+            } else {
+                cigar += std::to_string(count) + current_op;
+                current_op = cigar_ops[k];
+                count = 1;
+            }
+        }
+        cigar += std::to_string(count) + current_op;
+    }
+    
+    // Build visual string
+    for (char c : visual_chars) {
+        visual += c;
+    }
+    
+    return {edit_dist, cigar, visual};
 }
 
 // Full edit distance with indels (Levenshtein distance)
@@ -231,48 +284,63 @@ void process_sequence(const std::string& seq, const std::vector<std::string>& ex
     std::map<std::string, MotifStats> local_stats;
     int pattern_len = expanded_patterns[0].length();
     
-    // Slide through the sequence
+    // Slide through the sequence with different window sizes for indels
+    // Try exact length matches first (most common)
     for (size_t i = 0; i <= seq.length() - pattern_len; ++i) {
         // Update progress every 10000 bases
         if (i % 10000 == 0) {
             bases_processed.fetch_add(10000);
         }
-        std::string window = seq.substr(i, pattern_len);
         
-        // Skip windows with N
-        if (window.find('N') != std::string::npos || window.find('n') != std::string::npos) {
-            continue;
-        }
-        
-        // Convert to uppercase for comparison
-        std::transform(window.begin(), window.end(), window.begin(), ::toupper);
-        
-        // Check against all expanded patterns
-        int min_dist = max_distance + 1;
-        std::string best_cigar;
-        std::string best_visual;
-        for (const auto& pattern : expanded_patterns) {
-            auto result = align_sequences(pattern, window, max_distance);
-            if (result.edit_distance >= 0 && result.edit_distance < min_dist) {
-                min_dist = result.edit_distance;
-                best_cigar = result.cigar;
-                best_visual = result.visual_alignment;
-            }
-        }
-        
-        // If within threshold, record it
-        if (min_dist <= max_distance) {
-            if (local_stats.find(window) == local_stats.end()) {
-                local_stats[window].sequence = window;
-                local_stats[window].alignment = best_visual;
-                local_stats[window].edit_distance = min_dist;
-                local_stats[window].cigar = best_cigar;
+        // Try windows of different lengths (pattern_len +/- max_distance)
+        for (int len_diff = -max_distance; len_diff <= max_distance; len_diff++) {
+            int window_len = pattern_len + len_diff;
+            
+            // Skip invalid window lengths
+            if (window_len < 1 || i + window_len > seq.length()) {
+                continue;
             }
             
-            if (count_reverse) {
-                local_stats[window].count_reverse++;
-            } else {
-                local_stats[window].count_forward++;
+            std::string window = seq.substr(i, window_len);
+            
+            // Skip windows with N
+            if (window.find('N') != std::string::npos || window.find('n') != std::string::npos) {
+                continue;
+            }
+            
+            // Convert to uppercase for comparison
+            std::transform(window.begin(), window.end(), window.begin(), ::toupper);
+            
+            // Check against all expanded patterns
+            int min_dist = max_distance + 1;
+            std::string best_cigar;
+            std::string best_visual;
+            for (const auto& pattern : expanded_patterns) {
+                auto result = align_sequences(pattern, window, max_distance);
+                if (result.edit_distance >= 0 && result.edit_distance <= max_distance && result.edit_distance < min_dist) {
+                    min_dist = result.edit_distance;
+                    best_cigar = result.cigar;
+                    best_visual = result.visual_alignment;
+                }
+            }
+            
+            // If within threshold, record it
+            if (min_dist <= max_distance) {
+                if (local_stats.find(window) == local_stats.end()) {
+                    local_stats[window].sequence = window;
+                    local_stats[window].alignment = best_visual;
+                    local_stats[window].edit_distance = min_dist;
+                    local_stats[window].cigar = best_cigar;
+                }
+                
+                if (count_reverse) {
+                    local_stats[window].count_reverse++;
+                } else {
+                    local_stats[window].count_forward++;
+                }
+                
+                // Don't count overlapping indel variants from same position
+                break;
             }
         }
     }
@@ -435,9 +503,9 @@ void print_usage(const char* program_name) {
     std::cerr << "  output.tsv     Output TSV file with variant statistics\n\n";
     std::cerr << "Output columns:\n";
     std::cerr << "  motif          Discovered sequence variant\n";
-    std::cerr << "  alignment      Visual alignment (. for match, letter for mismatch)\n";
-    std::cerr << "  edit_distance  Hamming distance from reference motif\n";
-    std::cerr << "  cigar          CIGAR string showing alignment\n";
+    std::cerr << "  alignment      Visual alignment (. = match, letter = mismatch, - = gap)\n";
+    std::cerr << "  edit_distance  Edit distance from reference (includes indels)\n";
+    std::cerr << "  cigar          CIGAR string (M=match, X=mismatch, I=insertion, D=deletion)\n";
     std::cerr << "  count_*        Occurrence counts\n";
     std::cerr << "  freq_*         Percentage frequencies\n\n";
     std::cerr << "Example:\n";
