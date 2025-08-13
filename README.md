@@ -456,6 +456,47 @@ python analyze_motif_satellites.py variants.tsv satellites.tsv --by-type
 - **<50% in satellites**: Genome-wide distribution
 - **0% in satellites**: Present only outside satellite DNA
 
+### Step 4: Visualize Motifs in Satellite Sequences
+
+Create FASTA files where motif occurrences are highlighted in lowercase:
+
+```bash
+python visualize_motifs_in_satellites.py <satellites.tsv> <motifs.tsv> -o marked_satellites.fa
+```
+
+**Features:**
+- Converts motif occurrences to lowercase for visualization
+- Marks both forward and reverse strand matches
+- Preserves original sequence with case-based highlighting
+- Adds coverage statistics to headers
+
+**Input options:**
+1. **Satellite TSV**: File with `trf_array` column
+2. **Motif TSV**: Output from motif_discovery
+3. **Single motif**: Use `--single-motif SEQUENCE` for one motif
+
+**Examples:**
+```bash
+# Mark CENP-B boxes in satellites
+python visualize_motifs_in_satellites.py satellites.tsv cenpb_variants.tsv -o marked.fa --top-motifs 10
+
+# Mark single motif
+python visualize_motifs_in_satellites.py satellites.tsv dummy --single-motif YTTCGTTGGAARCGGGA -o marked.fa
+
+# Process FASTA directly
+python visualize_motifs_in_satellites.py genome.fa motifs.tsv -o marked_genome.fa --fasta-input
+
+# Add statistics to headers
+python visualize_motifs_in_satellites.py satellites.tsv motifs.tsv -o marked.fa --stats
+```
+
+**Output format:**
+```
+>sat_1 chr=chr1 pos=1000-2000 period=171 motif_bp=85 coverage=5.0%
+ATCGATCGttcgttggaaacgggaATCGATCGATCGATCGATCGttcgttggaaacggga...
+```
+Where lowercase letters indicate motif occurrences.
+
 ## Algorithm
 
 VarProfiler uses an efficient sliding window approach:
