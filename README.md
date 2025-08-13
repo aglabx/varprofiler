@@ -421,6 +421,9 @@ The tool will report the top 10 most frequent variants to the console and save a
 After discovering motif variants and annotating satellites, analyze which motifs are specific to satellite DNA:
 
 ```bash
+# Install required dependency (optional, for progress bars)
+pip install tqdm
+
 python analyze_motif_satellites.py <motif_discovery.tsv> <satellite_annotations.tsv> -o enrichment.tsv
 ```
 

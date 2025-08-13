@@ -13,6 +13,17 @@ from collections import defaultdict
 import sys
 import re
 
+try:
+    from tqdm import tqdm
+except ImportError:
+    print("Warning: tqdm not installed. Install with: pip install tqdm")
+    print("Using simple progress indicator instead.")
+    # Fallback progress function
+    def tqdm(iterable, total=None, desc=None, unit=None):
+        if desc:
+            print(f"{desc}...")
+        return iterable
+
 
 def reverse_complement(seq):
     """Get reverse complement of DNA sequence."""
@@ -124,15 +135,26 @@ def analyze_motif_enrichment(motif_df, sat_df, output_file):
     
     print("\nAnalyzing motif enrichment in satellite DNA...")
     
-    for idx, row in motif_df.iterrows():
+    # Pre-concatenate all satellite sequences for faster searching
+    print("  Preparing satellite sequences...")
+    sat_sequences = []
+    for sat_seq in sat_df['trf_array']:
+        if pd.notna(sat_seq) and sat_seq != '':
+            sat_sequences.append(sat_seq.upper())
+    
+    total_sat_length = sum(len(seq) for seq in sat_sequences)
+    print(f"  Total satellite DNA to search: {total_sat_length/1e6:.1f} Mb")
+    
+    # Process each motif with progress bar
+    for idx, row in tqdm(motif_df.iterrows(), total=len(motif_df), 
+                         desc="Processing motifs", unit="motif"):
         motif = row['motif']
         genome_count = row['count_total']
         
         # Count in all satellite arrays
         sat_count = 0
-        for sat_seq in sat_df['trf_array']:
-            if pd.notna(sat_seq):
-                sat_count += count_motif_in_sequence(motif, sat_seq, both_strands=True)
+        for sat_seq in sat_sequences:
+            sat_count += count_motif_in_sequence(motif, sat_seq, both_strands=True)
         
         # Calculate enrichment
         # Note: This is raw count, could normalize by sequence length
@@ -150,10 +172,6 @@ def analyze_motif_enrichment(motif_df, sat_df, output_file):
             'satellite_fraction': sat_fraction,
             'enrichment': 'satellite' if sat_fraction > 0.5 else 'genome-wide'
         })
-        
-        # Progress indicator
-        if (idx + 1) % 100 == 0:
-            print(f"  Processed {idx + 1}/{len(motif_df)} motifs...")
     
     # Create results dataframe
     results_df = pd.DataFrame(results)
@@ -206,47 +224,80 @@ def analyze_motif_enrichment(motif_df, sat_df, output_file):
 def analyze_by_satellite_type(motif_df, sat_df, output_prefix):
     """Analyze motif distribution by satellite type/family."""
     
-    # Check if satellite type columns exist
+    # Check if satellite type columns exist, use trf_period as fallback
     type_columns = ['trf_type', 'trf_family', 'trf_superfamily']
     available_cols = [col for col in type_columns if col in sat_df.columns]
     
-    if not available_cols:
-        print("No satellite type columns found for detailed analysis")
-        return
+    # Check if columns have actual data (not all NaN or empty)
+    valid_cols = []
+    for col in available_cols:
+        if sat_df[col].notna().any() and (sat_df[col] != '').any():
+            valid_cols.append(col)
     
-    for type_col in available_cols:
+    # If no valid type columns, use trf_period as classification
+    if not valid_cols:
+        if 'trf_period' in sat_df.columns:
+            print("Using trf_period for satellite classification (type/family columns empty)")
+            valid_cols = ['trf_period']
+        else:
+            print("No satellite classification columns found for detailed analysis")
+            return
+    
+    for type_col in valid_cols:
         print(f"\n=== Analyzing by {type_col} ===")
         
         # Group satellites by type
-        sat_types = sat_df[type_col].value_counts()
+        if type_col == 'trf_period':
+            # Create period ranges for better grouping
+            sat_df['period_class'] = pd.cut(sat_df['trf_period'], 
+                                           bins=[0, 10, 50, 100, 171, 200, 500, 1000, 10000],
+                                           labels=['1-10bp', '11-50bp', '51-100bp', '101-171bp', 
+                                                  '172-200bp', '201-500bp', '501-1000bp', '>1000bp'])
+            sat_types = sat_df['period_class'].value_counts()
+            type_col_name = 'period_class'
+        else:
+            sat_types = sat_df[type_col].value_counts()
+            type_col_name = type_col
+            
         print(f"Found {len(sat_types)} different {type_col} categories")
         
-        # Analyze top types
+        # Analyze top types with progress bar
         results = []
-        for sat_type in sat_types.head(10).index:
+        top_types = sat_types.head(10)
+        
+        for sat_type in tqdm(top_types.index, desc=f"Analyzing {type_col} types"):
             if pd.isna(sat_type):
                 continue
                 
             # Get sequences for this type
-            type_seqs = sat_df[sat_df[type_col] == sat_type]['trf_array']
-            total_bp = type_seqs.str.len().sum()
+            if type_col == 'trf_period':
+                type_seqs = sat_df[sat_df['period_class'] == sat_type]['trf_array']
+            else:
+                type_seqs = sat_df[sat_df[type_col] == sat_type]['trf_array']
             
-            print(f"\n  {sat_type}: {len(type_seqs)} arrays, {total_bp/1e6:.1f} Mb")
+            # Prepare sequences
+            type_sequences = []
+            for seq in type_seqs:
+                if pd.notna(seq) and seq != '':
+                    type_sequences.append(seq.upper())
+            
+            total_bp = sum(len(seq) for seq in type_sequences)
+            
+            print(f"  {sat_type}: {len(type_sequences)} arrays, {total_bp/1e6:.1f} Mb")
             
             # Count each motif in this satellite type
             type_motif_counts = {}
             for motif in motif_df['motif'].head(100):  # Analyze top 100 motifs
                 count = 0
-                for seq in type_seqs:
-                    if pd.notna(seq):
-                        count += count_motif_in_sequence(motif, seq)
+                for seq in type_sequences:
+                    count += count_motif_in_sequence(motif, seq, both_strands=True)
                 if count > 0:
                     type_motif_counts[motif] = count
             
             # Store results
             for motif, count in type_motif_counts.items():
                 results.append({
-                    'satellite_type': sat_type,
+                    'satellite_type': str(sat_type),
                     'type_column': type_col,
                     'motif': motif,
                     'count': count,
