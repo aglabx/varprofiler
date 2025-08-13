@@ -16,6 +16,12 @@ A high-performance tool for analyzing k-mer variability across genomes, designed
   - Both strand searching
   - Unlimited thread scaling
 
+- **motif_discovery**: Genome-wide motif variant discovery tool
+  - Finds all variants within edit distance of reference motif
+  - Reports frequency statistics per strand
+  - Supports IUPAC degenerate codes
+  - Multi-threaded genome scanning
+
 ### Analysis Capabilities
 - **Satellite DNA detection**: Automatic identification of low k-mer diversity regions
 - **Advanced centromere prediction**: Multi-signal scoring system combining:
@@ -356,6 +362,51 @@ CENP-B boxes are binding sites for CENP-B protein, which:
 - High density indicates functional centromeric regions
 
 The CENP-B box count and density are included in the GFF annotations and help confirm functional centromeres.
+
+### Step 2c: Discover CENP-B box variants (optional)
+
+For non-human genomes or to refine the CENP-B box consensus, use the motif discovery tool:
+
+```bash
+./motif_discovery <genome.fasta> <motif> <max_distance> <threads> <output.csv>
+```
+
+**Parameters:**
+- `genome.fasta`: Input genome in FASTA format
+- `motif`: Reference motif with IUPAC codes (e.g., YTTCGTTGGAARCGGGA)
+- `max_distance`: Maximum edit distance (0-10)
+- `threads`: Number of parallel threads
+- `output.csv`: Output CSV with variant statistics
+
+**Output CSV columns:**
+- `motif`: Discovered sequence variant
+- `edit_distance`: Distance from reference motif
+- `count_forward`: Occurrences on forward strand
+- `count_reverse`: Occurrences on reverse strand
+- `count_total`: Total occurrences
+- `freq_forward`: Percentage on forward strand
+- `freq_reverse`: Percentage on reverse strand
+- `freq_total`: Overall percentage
+
+**Examples:**
+```bash
+# Discover CENP-B variants in human genome
+./motif_discovery human.fa YTTCGTTGGAARCGGGA 3 8 cenpb_variants.csv
+
+# Search for variants in mouse genome with relaxed threshold
+./motif_discovery mouse.fa YTTCGTTGGAWRCGGGA 4 16 mouse_cenpb.csv
+
+# Find exact matches only
+./motif_discovery genome.fa TTCGTTGGAAACGGGA 0 4 exact_matches.csv
+```
+
+**Use cases:**
+1. **Species-specific optimization**: Find the most common CENP-B variant in your species
+2. **Motif refinement**: Identify degenerate positions in the consensus
+3. **Quality control**: Verify expected motif frequencies
+4. **Comparative genomics**: Compare motif usage across species
+
+The tool will report the top 10 most frequent variants to the console and save all variants sorted by frequency to the CSV file.
 
 ## Algorithm
 

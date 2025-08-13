@@ -213,6 +213,7 @@ supplementary.md
 # Compiled C++ binaries
 kmer_profiler
 cenpb_finder
+motif_discovery
 
 # IDE specific
 .vscode/

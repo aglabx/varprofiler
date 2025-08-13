@@ -2,7 +2,7 @@
 
 CXX = g++
 CXXFLAGS = -std=c++17 -O3 -march=native -pthread -Wall -Wextra
-TARGETS = kmer_profiler cenpb_finder
+TARGETS = kmer_profiler cenpb_finder motif_discovery
 
 # Main target - build all tools
 all: $(TARGETS)
@@ -13,6 +13,10 @@ kmer_profiler: kmer_profiler.cpp
 
 # Compile CENP-B box finder
 cenpb_finder: cenpb_finder.cpp
+	$(CXX) $(CXXFLAGS) -o $@ $<
+
+# Compile motif variant discovery tool
+motif_discovery: motif_discovery.cpp
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
 # Clean build artifacts
