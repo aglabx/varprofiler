@@ -29,14 +29,25 @@ def calculate_threshold(df, percentile=5):
         df['max_kmers'] = df['window_size'] - df['kmer_size'] + 1
         df['kmer_percentage'] = (df['kmer_count'] / df['max_kmers']) * 100
     
-    # Calculate global threshold
-    global_threshold = np.percentile(df['kmer_percentage'], percentile)
+    # Filter out gap regions (k-mer count = 0 indicates gaps filled with Ns)
+    # These regions have no valid k-mers and should not be considered
+    non_gap_df = df[df['kmer_count'] > 0]
     
-    # Calculate per-chromosome thresholds
+    if len(non_gap_df) == 0:
+        print("Warning: No non-gap regions found in the data")
+        return 0, {}
+    
+    # Calculate global threshold from non-gap regions only
+    global_threshold = np.percentile(non_gap_df['kmer_percentage'], percentile)
+    
+    # Calculate per-chromosome thresholds from non-gap regions only
     chrom_thresholds = {}
     for chrom in df['chromosome'].unique():
-        chrom_df = df[df['chromosome'] == chrom]
-        chrom_thresholds[chrom] = np.percentile(chrom_df['kmer_percentage'], percentile)
+        chrom_non_gap = df[(df['chromosome'] == chrom) & (df['kmer_count'] > 0)]
+        if len(chrom_non_gap) > 0:
+            chrom_thresholds[chrom] = np.percentile(chrom_non_gap['kmer_percentage'], percentile)
+        else:
+            chrom_thresholds[chrom] = global_threshold  # Use global if no non-gap regions
     
     return global_threshold, chrom_thresholds
 
@@ -126,8 +137,9 @@ def detect_low_variability_regions(bed_file, kmer_size, output_prefix,
         
         print(f"  {chrom}: threshold = {threshold:.2f}%")
         
-        # Find windows below threshold
-        low_var = chrom_df[chrom_df['kmer_percentage'] < threshold]
+        # Find windows below threshold, excluding gaps (kmer_count = 0)
+        # Gap regions should not be considered as low-diversity regions
+        low_var = chrom_df[(chrom_df['kmer_percentage'] < threshold) & (chrom_df['kmer_count'] > 0)]
         
         if len(low_var) > 0:
             # Extract regions
@@ -407,13 +419,20 @@ def find_centromere_candidates(regions, df, kmer_size, cenpb_data=None, all_cand
             if len(array_windows) == 0:
                 continue
             
-            # Find local minima
-            min_idx = array_windows['kmer_percentage'].idxmin()
-            min_kmer_pct = array_windows.loc[min_idx, 'kmer_percentage']
+            # Find local minima, excluding gaps (kmer_count = 0)
+            non_gap_windows = array_windows[array_windows['kmer_count'] > 0]
+            if len(non_gap_windows) == 0:
+                continue
             
-            # Score each window in the array
+            min_idx = non_gap_windows['kmer_percentage'].idxmin()
+            min_kmer_pct = non_gap_windows.loc[min_idx, 'kmer_percentage']
+            
+            # Score each window in the array, excluding gaps
             window_scores = []
             for idx, window in array_windows.iterrows():
+                # Skip gap regions (kmer_count = 0)
+                if window['kmer_count'] == 0:
+                    continue
                 # Get CENP-B data
                 window_key = f"{chrom}:{int(window['start'])}-{int(window['end'])}"
                 cenpb_density = 0
@@ -424,6 +443,10 @@ def find_centromere_candidates(regions, df, kmer_size, cenpb_data=None, all_cand
                 
                 # Check if this is a local minimum
                 is_minimum = (idx == min_idx) or (window['kmer_percentage'] < array_mean * 0.7)
+                
+                # Skip windows without CENP-B boxes - they cannot be centromeres
+                if cenpb_density == 0:
+                    continue
                 
                 # Calculate score
                 score, weights = score_centromere_likelihood(
@@ -1062,6 +1085,20 @@ def main():
         args.global_threshold
     )
     
+    # Check for gap regions in the data
+    gap_regions = df[df['kmer_count'] == 0]
+    if len(gap_regions) > 0:
+        gap_count = len(gap_regions)
+        total_gap_size = gap_regions.apply(lambda x: x['end'] - x['start'], axis=1).sum()
+        print(f"\nWarning: Found {gap_count} gap regions (total {total_gap_size/1e6:.1f} Mb)")
+        print("Gap regions (filled with Ns) are excluded from centromere detection.")
+        
+        # Report gap regions per chromosome
+        for chrom in gap_regions['chromosome'].unique():
+            chrom_gaps = gap_regions[gap_regions['chromosome'] == chrom]
+            gap_size = chrom_gaps.apply(lambda x: x['end'] - x['start'], axis=1).sum()
+            print(f"  {chrom}: {len(chrom_gaps)} gaps, {gap_size/1e6:.1f} Mb")
+    
     if not regions:
         print("\nNo low variability regions found.")
         return
@@ -1126,16 +1163,25 @@ def main():
     centromeres = []
     if args.find_centromeres:
         print("\nSearching for centromere candidates...")
-        if args.all_centromeres:
-            print(f"  Mode: All candidates with score >= {args.centromere_min_score}")
-        else:
-            print(f"  Mode: Best per chromosome (score >= {args.centromere_min_score})")
         
-        centromeres = find_centromere_candidates(
-            regions, df, args.kmer_size, cenpb_data,
-            all_candidates=args.all_centromeres,
-            min_score=args.centromere_min_score
-        )
+        # Check if CENP-B data is available - required for centromere detection
+        if not cenpb_data:
+            print("Warning: CENP-B box analysis is required for centromere detection")
+            print("No genome sequence provided - centromere detection disabled")
+            print("To enable: provide genome with -g option")
+            centromeres = []
+        else:
+            print("Note: Only regions with CENP-B boxes will be considered as centromeres")
+            if args.all_centromeres:
+                print(f"  Mode: All candidates with score >= {args.centromere_min_score}")
+            else:
+                print(f"  Mode: Best per chromosome (score >= {args.centromere_min_score})")
+            
+            centromeres = find_centromere_candidates(
+                regions, df, args.kmer_size, cenpb_data,
+                all_candidates=args.all_centromeres,
+                min_score=args.centromere_min_score
+            )
         
         if args.all_centromeres:
             # Report by chromosome

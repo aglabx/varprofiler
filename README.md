@@ -363,10 +363,11 @@ VarProfiler uses an efficient sliding window approach:
 
 1. **K-mer encoding**: Nucleotides are encoded in 2-bit format (A=00, C=01, G=10, T=11)
 2. **Canonical k-mers**: For each k-mer, the lexicographically smaller of the forward and reverse complement is used
-3. **Sliding window**: 
+3. **Gap handling**: K-mers containing 'N' bases are skipped, preventing assembly gaps from being misidentified as low-diversity regions
+4. **Sliding window**: 
    - Initial window: Count all unique k-mers
    - Subsequent windows: Add new k-mers entering the window, remove k-mers leaving
-4. **Parallel processing**: Each chromosome is processed in a separate thread
+5. **Parallel processing**: Each chromosome is processed in a separate thread
 
 ## Performance Considerations
 
