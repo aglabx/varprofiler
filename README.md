@@ -515,6 +515,7 @@ chr1_array   fwd         1      MONOMER  171     FALSE     CGTA...
 **Features:**
 - Marks motifs in each monomer/flank sequence
 - Adds `marked_sequence` column with lowercase motifs
+- Adds `motif_count` column with number of motif occurrences (for easy filtering)
 - Calculates per-monomer coverage statistics
 - Groups statistics by sequence type (MONOMER, LEFT_FLANK, etc.)
 - Identifies monomers with highest motif density
@@ -534,11 +535,26 @@ python visualize_motifs_in_monomers.py monomers.tsv motifs.tsv -o marked.tsv --f
 python visualize_motifs_in_monomers.py monomers.tsv motifs.tsv -o marked.tsv --fasta marked.fa --min-coverage 5.0
 ```
 
+**Output columns in TSV:**
+- All original columns preserved
+- `marked_sequence`: Sequence with motifs in lowercase
+- `motif_count`: Number of motif occurrences (0, 1, 2, etc.)
+
 **Output statistics:**
+- Sequences with/without motifs (percentage)
+- Motif count distribution (0, 1, 2, 3+ motifs)
 - Per-monomer motif coverage percentage
-- Total motif hits per monomer
 - Average coverage by type (MONOMER vs FLANK)
 - Top monomers by motif density
+
+**Filtering examples (using output TSV):**
+```bash
+# Get only sequences with motifs
+awk -F'\t' 'NR==1 || $NF>0' marked_monomers.tsv > with_motifs.tsv
+
+# Get sequences with 2+ motifs
+awk -F'\t' 'NR==1 || $NF>=2' marked_monomers.tsv > multiple_motifs.tsv
+```
 
 This helps identify:
 - Which monomers contain functional motifs (e.g., CENP-B boxes)

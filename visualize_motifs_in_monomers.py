@@ -73,7 +73,7 @@ def mark_motifs_in_sequence(sequence, motifs):
         motifs: List of motif sequences
     
     Returns:
-        Modified sequence with motifs in lowercase, and count of marked positions
+        Tuple of (modified sequence, marked positions count, total motif occurrences)
     """
     if isinstance(motifs, str):
         motifs = [motifs]
@@ -82,9 +82,11 @@ def mark_motifs_in_sequence(sequence, motifs):
     seq_len = len(sequence)
     lowercase_mask = [False] * seq_len
     
-    # Find all motif positions
+    # Find all motif positions and count occurrences
+    total_motif_count = 0
     for motif in motifs:
         positions = find_motif_positions(sequence, motif, both_strands=True)
+        total_motif_count += len(positions)
         for start, end in positions:
             for i in range(start, min(end, seq_len)):
                 lowercase_mask[i] = True
@@ -99,7 +101,7 @@ def mark_motifs_in_sequence(sequence, motifs):
         else:
             result.append(char.upper())
     
-    return ''.join(result), marked_count
+    return ''.join(result), marked_count, total_motif_count
 
 
 def load_motifs(motif_file, top_n=None, min_count=0):
@@ -179,19 +181,21 @@ def process_monomer_file(monomer_file, motifs, output_file,
     
     # Process each sequence
     marked_sequences = []
+    motif_counts_list = []
     stats = []
     
     for idx, row in tqdm(df.iterrows(), total=len(df), desc="Marking motifs"):
         sequence = row['sequence']
         
         # Mark motifs
-        marked_seq, marked_count = mark_motifs_in_sequence(sequence, motifs)
+        marked_seq, marked_count, total_motifs = mark_motifs_in_sequence(sequence, motifs)
         marked_sequences.append(marked_seq)
+        motif_counts_list.append(total_motifs)
         
         # Calculate statistics
         coverage = (marked_count / len(sequence)) * 100 if len(sequence) > 0 else 0
         
-        # Count individual motif occurrences
+        # Count individual motif occurrences for detailed stats
         motif_counts = {}
         for motif in motifs[:10]:  # Count top 10 motifs individually
             positions = find_motif_positions(sequence, motif, both_strands=True)
@@ -205,12 +209,13 @@ def process_monomer_file(monomer_file, motifs, output_file,
             'length': row['length'],
             'marked_bp': marked_count,
             'coverage_pct': coverage,
-            'total_motif_hits': sum(motif_counts.values()),
+            'total_motif_hits': total_motifs,
             **{f'motif_{i+1}_count': count for i, count in enumerate(motif_counts.values())}
         })
     
-    # Add marked sequences to dataframe
+    # Add marked sequences and motif counts to dataframe
     df['marked_sequence'] = marked_sequences
+    df['motif_count'] = motif_counts_list
     
     # Save output
     print(f"\nSaving marked sequences to {output_file}...")
@@ -229,6 +234,12 @@ def process_monomer_file(monomer_file, motifs, output_file,
     grouped = pd.DataFrame(stats).groupby('sequence_id')
     print(f"Total sequence IDs: {len(grouped)}")
     
+    # Count sequences with/without motifs
+    with_motifs = df[df['motif_count'] > 0]
+    without_motifs = df[df['motif_count'] == 0]
+    print(f"\nSequences with motifs: {len(with_motifs)} ({len(with_motifs)/len(df)*100:.1f}%)")
+    print(f"Sequences without motifs: {len(without_motifs)} ({len(without_motifs)/len(df)*100:.1f}%)")
+    
     # Statistics by type
     type_stats = pd.DataFrame(stats).groupby('type').agg({
         'coverage_pct': ['mean', 'std', 'min', 'max'],
@@ -236,6 +247,16 @@ def process_monomer_file(monomer_file, motifs, output_file,
     }).round(2)
     print("\nMotif coverage by type:")
     print(type_stats)
+    
+    # Motif count distribution
+    print("\nMotif count distribution:")
+    motif_dist = df['motif_count'].value_counts().sort_index()
+    for count in range(min(6, motif_dist.index.max() + 1)):
+        n_seqs = motif_dist.get(count, 0)
+        print(f"  {count} motifs: {n_seqs} sequences ({n_seqs/len(df)*100:.1f}%)")
+    if motif_dist.index.max() > 5:
+        n_seqs = motif_dist[motif_dist.index > 5].sum()
+        print(f"  >5 motifs: {n_seqs} sequences ({n_seqs/len(df)*100:.1f}%)")
     
     # Find monomers with highest motif density
     monomer_stats = pd.DataFrame(stats)[pd.DataFrame(stats)['type'] == 'MONOMER']
