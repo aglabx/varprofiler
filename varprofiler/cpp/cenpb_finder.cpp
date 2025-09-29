@@ -67,13 +67,6 @@ std::vector<std::string> expand_iupac_pattern(const std::string& pattern) {
             }
         }
         result = new_result;
-        
-        // Limit expansion to prevent combinatorial explosion
-        if (result.size() > 100) {
-            std::cerr << "Warning: Pattern expansion limited to first 100 variants\n";
-            result.resize(100);
-            break;
-        }
     }
     
     return result;
