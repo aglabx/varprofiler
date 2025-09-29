@@ -7,77 +7,57 @@ import argparse
 import os
 import sys
 
+# Import from our modules
+from varprofiler.utils.gff_utils import read_gff_annotations as read_gff_base
+
+
 def read_gff_annotations(gff_file_path, feature_type='satellite'):
     """
-    Read annotations from GFF file.
+    Read annotations from GFF file - wrapper for backwards compatibility.
     
     Args:
         gff_file_path (str): Path to GFF file with annotations.
         feature_type (str): Type of features to extract ('satellite', 'centromere', or 'both')
     
     Returns:
-        dict: Dictionary with 'satellites' and/or 'centromeres' keys, each containing
-              a dict with chromosome names as keys and list of (start, end, attributes) tuples.
+        dict: Dictionary with 'satellites' and/or 'centromeres' keys.
     """
-    annotations = {'satellites': {}, 'centromeres': {}}
+    # Use the base function from gff_utils
+    all_annotations = read_gff_base(gff_file_path)
     
-    if not gff_file_path or not os.path.exists(gff_file_path):
-        return annotations
+    # Convert to the format expected by this script
+    result = {'satellites': {}, 'centromeres': {}}
     
-    try:
-        with open(gff_file_path, 'r') as f:
-            for line in f:
-                if line.startswith('#'):
-                    continue
-                    
-                parts = line.strip().split('\t')
-                if len(parts) < 9:
-                    continue
-                    
-                chrom = parts[0]
-                feat_type = parts[2]
-                start = int(parts[3]) - 1  # Convert to 0-based
-                end = int(parts[4])
-                attributes = parts[8] if len(parts) > 8 else ''
-                
-                # Parse attributes
-                attr_dict = {}
-                for attr in attributes.split(';'):
-                    if '=' in attr:
-                        key, value = attr.split('=', 1)
-                        attr_dict[key] = value
-                
-                # Check if this is a centromere region
-                if 'centromere' in feat_type.lower() or 'centromere_containing_region' in feat_type:
-                    if feature_type in ['centromere', 'both']:
-                        if chrom not in annotations['centromeres']:
-                            annotations['centromeres'][chrom] = []
-                        annotations['centromeres'][chrom].append((start, end, attr_dict))
-                
-                # Check if this is a satellite/low complexity region
-                elif any(term in feat_type.lower() for term in ['satellite', 'tandem', 'low_kmer', 'complex']):
-                    # Only include regions longer than 10kb for satellites
-                    if end - start > 10000:
-                        if feature_type in ['satellite', 'both']:
-                            if chrom not in annotations['satellites']:
-                                annotations['satellites'][chrom] = []
-                            annotations['satellites'][chrom].append((start, end, attr_dict))
-        
-        # Sort by start position
-        for ann_type in annotations:
-            for chrom in annotations[ann_type]:
-                annotations[ann_type][chrom].sort(key=lambda x: x[0])
-        
-        # Print summary
-        if annotations['satellites']:
-            print(f"Loaded satellite annotations for {len(annotations['satellites'])} chromosomes")
-        if annotations['centromeres']:
-            print(f"Loaded centromere annotations for {len(annotations['centromeres'])} chromosomes")
-        
-    except Exception as e:
-        print(f"Warning: Could not read GFF file: {e}", file=sys.stderr)
+    for chrom, features in all_annotations.items():
+        for feat in features:
+            feat_type = feat['type']
+            start = feat['start']
+            end = feat['end']
+            attrs = feat['attributes']
+            
+            # Check if this is a centromere region
+            if 'centromere' in feat_type.lower() or 'centromere_containing_region' in feat_type:
+                if feature_type in ['centromere', 'both']:
+                    if chrom not in result['centromeres']:
+                        result['centromeres'][chrom] = []
+                    result['centromeres'][chrom].append((start, end, attrs))
+            
+            # Check if this is a satellite/low complexity region
+            elif any(term in feat_type.lower() for term in ['satellite', 'tandem', 'low_kmer', 'complex']):
+                # Only include regions longer than 10kb for satellites
+                if end - start > 10000:
+                    if feature_type in ['satellite', 'both']:
+                        if chrom not in result['satellites']:
+                            result['satellites'][chrom] = []
+                        result['satellites'][chrom].append((start, end, attrs))
     
-    return annotations
+    # Print summary
+    if result['satellites']:
+        print(f"Loaded satellite annotations for {len(result['satellites'])} chromosomes")
+    if result['centromeres']:
+        print(f"Loaded centromere annotations for {len(result['centromeres'])} chromosomes")
+    
+    return result
 
 def create_plotly_chromosome_plot(chrom_df, chrom, satellites, centromeres, output_dir, kmer_size):
     """

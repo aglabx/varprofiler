@@ -1,0 +1,114 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "varprofiler"
+version = "0.1.0"
+description = "A comprehensive toolkit for analyzing sequence variability, satellite DNA, and centromeres in genomic data"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "aglabx", email = "ad3002@gmail.com"},
+]
+maintainers = [
+    {name = "aglabx", email = "ad3002@gmail.com"},
+]
+keywords = [
+    "bioinformatics",
+    "genomics",
+    "satellite-dna",
+    "centromere",
+    "k-mer",
+    "sequence-analysis",
+    "repetitive-dna",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: C++",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+]
+
+dependencies = [
+    "numpy>=1.20.0",
+    "pandas>=1.3.0",
+    "matplotlib>=3.3.0",
+    "plotly>=5.0.0",
+    "tqdm>=4.60.0",
+    "biopython>=1.79",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=3.0.0",
+    "black>=22.0.0",
+    "flake8>=4.0.0",
+    "mypy>=0.900",
+    "pre-commit>=2.15.0",
+]
+docs = [
+    "sphinx>=4.0.0",
+    "sphinx-rtd-theme>=1.0.0",
+    "sphinx-autodoc-typehints>=1.12.0",
+]
+all = ["varprofiler[dev,docs]"]
+
+[project.urls]
+Homepage = "https://github.com/aglabx/varprofiler"
+Documentation = "https://varprofiler.readthedocs.io"
+Repository = "https://github.com/aglabx/varprofiler"
+Issues = "https://github.com/aglabx/varprofiler/issues"
+
+[project.scripts]
+# Main unified CLI
+varprofiler = "varprofiler.cli.main:main"
+
+# Legacy commands for backwards compatibility
+varprofiler-detect-satellites = "varprofiler.cli.detect_satellites:main"
+varprofiler-plot = "varprofiler.cli.plot_chromosomes:main"
+varprofiler-analyze-motifs = "varprofiler.cli.analyze_motif_satellites:main"
+varprofiler-visualize-motifs = "varprofiler.cli.visualize_motifs_in_satellites:main"
+varprofiler-visualize-monomers = "varprofiler.cli.visualize_motifs_in_monomers:main"
+
+[tool.setuptools]
+packages = ["varprofiler", "varprofiler.cli", "varprofiler.utils"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+varprofiler = ["cpp/*.cpp", "cpp/*.h", "cpp/Makefile", "utils/*.md"]
+
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311']
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = false
+no_implicit_optional = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --strict-markers"
+testpaths = ["tests"]
+python_files = "test_*.py"

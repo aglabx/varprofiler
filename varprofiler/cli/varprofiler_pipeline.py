@@ -108,28 +108,23 @@ class VarProfilerPipeline:
         self.log_message("STEP 1: K-mer Profiling")
         self.log_message("=" * 60)
         
-        # Check if kmer_profiler exists
-        kmer_profiler = Path('./kmer_profiler')
-        if not kmer_profiler.exists():
-            self.log_message("kmer_profiler not found, attempting to compile...", level='WARNING')
-            self.compile_kmer_profiler()
-        
+        # Use varprofiler CLI command
         # Output file
         bed_file = self.dirs['profiles'] / f"kmer_profile_k{self.config['kmer_size']}.bed"
         
-        # Build command
+        # Build command using varprofiler CLI
         cmd = [
-            str(kmer_profiler),
+            'varprofiler', 'profiler',
             self.config['input_fasta'],
-            str(bed_file),
-            str(self.config['kmer_size']),
-            str(self.config['window_size']),
-            str(self.config['step_size'])
+            '-o', str(bed_file),
+            '-k', str(self.config['kmer_size']),
+            '-w', str(self.config['window_size']),
+            '-s', str(self.config['step_size'])
         ]
         
         # Add threads if specified
         if self.config.get('threads'):
-            cmd.append(str(self.config['threads']))
+            cmd.extend(['-t', str(self.config['threads'])])
         
         # Run k-mer profiling
         self.run_command(cmd, "k-mer profiling")
@@ -158,7 +153,7 @@ class VarProfilerPipeline:
         
         # Build command
         cmd = [
-            'python', 'detect_satellites.py',
+            'varprofiler', 'satellites',
             str(bed_file),
             '-k', str(self.config['kmer_size']),
             '-o', str(output_prefix),
@@ -177,6 +172,14 @@ class VarProfilerPipeline:
         # Add centromere detection flag
         if self.config.get('find_centromeres', True):
             cmd.append('--find-centromeres')
+        
+        # Add CENP-B search parameters
+        if self.config.get('cenpb_pattern'):
+            cmd.extend(['--cenpb-pattern', self.config['cenpb_pattern']])
+        if self.config.get('cenpb_distance'):
+            cmd.extend(['--cenpb-distance', str(self.config['cenpb_distance'])])
+        if self.config.get('cenpb_threads'):
+            cmd.extend(['--cenpb-threads', str(self.config['cenpb_threads'])])
         
         # Add global threshold flag if requested
         if self.config.get('use_global_threshold', False):
@@ -204,7 +207,7 @@ class VarProfilerPipeline:
         
         # Build command
         cmd = [
-            'python', 'plot_chromosomes.py',
+            'varprofiler', 'plot',
             str(bed_file),
             '-k', str(self.config['kmer_size']),
             '-o', str(output_dir)
@@ -427,6 +430,17 @@ def main():
     parser.add_argument('--trf-gff',
                        help='Additional GFF file for visualization overlay')
     
+    # CENP-B search parameters
+    parser.add_argument('--cenpb-pattern',
+                       default='YTTCGTTGGAARCGGGA',
+                       help='CENP-B box pattern (default: YTTCGTTGGAARCGGGA)')
+    parser.add_argument('--cenpb-distance',
+                       type=int, default=3,
+                       help='Maximum edit distance for CENP-B search (default: 3)')
+    parser.add_argument('--cenpb-threads',
+                       type=int, 
+                       help='Threads for CENP-B search (default: same as -t)')
+    
     # Configuration file
     parser.add_argument('-c', '--config',
                        help='JSON configuration file (overrides command line arguments)')
@@ -462,6 +476,14 @@ def main():
         config['trf_annotations'] = args.trf_annotations
     if args.trf_gff:
         config['trf_gff'] = args.trf_gff
+    
+    # Add CENP-B parameters
+    config['cenpb_pattern'] = args.cenpb_pattern
+    config['cenpb_distance'] = args.cenpb_distance
+    if args.cenpb_threads:
+        config['cenpb_threads'] = args.cenpb_threads
+    elif args.threads:
+        config['cenpb_threads'] = args.threads  # Use main thread count if not specified
     
     # Apply profile if specified
     if args.profile:

@@ -11,92 +11,24 @@ import pandas as pd
 import numpy as np
 from collections import defaultdict
 import sys
-import re
 
-try:
-    from tqdm import tqdm
-except ImportError:
-    print("Warning: tqdm not installed. Install with: pip install tqdm")
-    print("Using simple progress indicator instead.")
-    # Fallback progress function
-    def tqdm(iterable, total=None, desc=None, unit=None):
-        if desc:
-            print(f"{desc}...")
-        return iterable
+# Import from our new modules
+from varprofiler.utils.utils import get_tqdm
+from varprofiler.utils.motif_utils import (
+    count_motif_in_sequence,
+    load_motifs_from_tsv
+)
 
-
-def reverse_complement(seq):
-    """Get reverse complement of DNA sequence."""
-    complement = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G', 
-                  'N': 'N', 'R': 'Y', 'Y': 'R', 'S': 'S', 
-                  'W': 'W', 'K': 'M', 'M': 'K', 'B': 'V',
-                  'V': 'B', 'D': 'H', 'H': 'D'}
-    return ''.join(complement.get(c.upper(), c) for c in seq[::-1])
-
-
-def count_motif_in_sequence(motif, sequence, both_strands=True):
-    """Count occurrences of motif in sequence."""
-    seq_upper = sequence.upper()
-    motif_upper = motif.upper()
-    
-    # Count forward strand
-    count = seq_upper.count(motif_upper)
-    
-    # Count reverse strand if requested
-    if both_strands:
-        rc_motif = reverse_complement(motif_upper)
-        if rc_motif != motif_upper:  # Avoid double counting palindromes
-            count += seq_upper.count(rc_motif)
-    
-    return count
-
-
-def count_motif_with_regex(motif, sequence, both_strands=True):
-    """Count motif allowing for IUPAC ambiguity codes."""
-    # Convert IUPAC to regex
-    iupac_dict = {
-        'R': '[AG]', 'Y': '[CT]', 'S': '[GC]', 'W': '[AT]',
-        'K': '[GT]', 'M': '[AC]', 'B': '[CGT]', 'D': '[AGT]',
-        'H': '[ACT]', 'V': '[ACG]', 'N': '[ACGT]'
-    }
-    
-    pattern = motif.upper()
-    for code, regex in iupac_dict.items():
-        pattern = pattern.replace(code, regex)
-    
-    seq_upper = sequence.upper()
-    
-    # Count forward strand
-    count = len(re.findall(pattern, seq_upper))
-    
-    # Count reverse strand if requested
-    if both_strands:
-        rc_motif = reverse_complement(motif.upper())
-        rc_pattern = rc_motif
-        for code, regex in iupac_dict.items():
-            rc_pattern = rc_pattern.replace(code, regex)
-        
-        if rc_pattern != pattern:  # Avoid double counting palindromes
-            count += len(re.findall(rc_pattern, seq_upper))
-    
-    return count
+# Get tqdm with fallback
+tqdm = get_tqdm()
 
 
 def load_motif_data(tsv_file):
     """Load motif discovery results from TSV file."""
     print(f"Loading motif data from {tsv_file}...")
     
-    # Read TSV with proper column names
-    df = pd.read_csv(tsv_file, sep='\t')
-    
-    # Expected columns from motif_discovery output
-    expected_cols = ['motif', 'alignment', 'edit_distance', 'cigar', 
-                     'count_forward', 'count_reverse', 'count_total']
-    
-    # Check if all expected columns are present
-    missing_cols = [col for col in expected_cols if col not in df.columns]
-    if missing_cols:
-        print(f"Warning: Missing columns in motif file: {missing_cols}")
+    # Use the new utility function
+    df = load_motifs_from_tsv(tsv_file)
     
     print(f"  Loaded {len(df)} motif variants")
     print(f"  Total occurrences in genome: {df['count_total'].sum():,}")
@@ -151,7 +83,7 @@ def analyze_motif_enrichment(motif_df, sat_df, output_file):
         motif = row['motif']
         genome_count = row['count_total']
         
-        # Count in all satellite arrays
+        # Count in all satellite arrays using utility function
         sat_count = 0
         for sat_seq in sat_sequences:
             sat_count += count_motif_in_sequence(motif, sat_seq, both_strands=True)

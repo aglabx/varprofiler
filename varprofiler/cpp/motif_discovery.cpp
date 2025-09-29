@@ -24,6 +24,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <cmath>
+#ifdef __SSE2__
+#include <emmintrin.h>
+#endif
 
 // IUPAC nucleotide codes
 const std::unordered_map<char, std::string> IUPAC_CODES = {
@@ -32,6 +36,27 @@ const std::unordered_map<char, std::string> IUPAC_CODES = {
     {'K', "GT"}, {'M', "AC"}, {'B', "CGT"}, {'D', "AGT"},
     {'H', "ACT"}, {'V', "ACG"}, {'N', "ACGT"}
 };
+
+// Check if a nucleotide matches an IUPAC code
+inline bool iupac_match(char iupac_code, char nucleotide) {
+    char iupac_upper = toupper(iupac_code);
+    char nuc_upper = toupper(nucleotide);
+    
+    // Handle N separately for any non-IUPAC characters
+    if (nuc_upper == 'N') return true;  // N in sequence matches anything
+    if (iupac_upper == 'N') return true;  // N in pattern matches anything
+    
+    // Direct match
+    if (iupac_upper == nuc_upper) return true;
+    
+    // Check IUPAC ambiguity codes
+    auto it = IUPAC_CODES.find(iupac_upper);
+    if (it != IUPAC_CODES.end()) {
+        return it->second.find(nuc_upper) != std::string::npos;
+    }
+    
+    return false;
+}
 
 // Structure to hold motif variant statistics
 struct MotifStats {
@@ -44,12 +69,26 @@ struct MotifStats {
     size_t count_total = 0;
 };
 
+// Structure to hold individual motif occurrences
+struct MotifOccurrence {
+    std::string chr;
+    size_t start;
+    size_t end;
+    std::string motif;
+    int edit_distance;
+    char strand;  // '+' or '-'
+};
+
 // Mutex for thread-safe updates
 std::mutex stats_mutex;
 std::mutex progress_mutex;
+std::mutex occurrences_mutex;
 
 // Global map to store all discovered variants
 std::map<std::string, MotifStats> global_stats;
+
+// Global vector to store all motif occurrences
+std::vector<MotifOccurrence> global_occurrences;
 
 // Progress tracking
 std::atomic<size_t> bases_processed(0);
@@ -144,11 +183,10 @@ AlignmentResult align_sequences(const std::string& ref, const std::string& query
     
     // Use single row DP for space optimization when we only need distance
     if (m == n && max_dist <= 3) {
-        // OPTIMIZATION 2: For small distances and equal lengths, use bit-parallel approach
-        // This is much faster for Hamming distance
+        // OPTIMIZATION 2: For small distances and equal lengths, use IUPAC-aware Hamming distance
         int hamming = 0;
         for (int i = 0; i < m; i++) {
-            if (toupper(ref[i]) != toupper(query[i])) hamming++;
+            if (!iupac_match(ref[i], query[i])) hamming++;
             if (hamming > max_dist) return {hamming, "", ""};  // Early termination
         }
         // Only build alignment if within threshold
@@ -157,7 +195,7 @@ AlignmentResult align_sequences(const std::string& ref, const std::string& query
             std::string cigar, visual;
             int match_count = 0;
             for (int i = 0; i < m; i++) {
-                if (toupper(ref[i]) == toupper(query[i])) {
+                if (iupac_match(ref[i], query[i])) {
                     match_count++;
                     visual += '.';
                 } else {
@@ -191,7 +229,7 @@ AlignmentResult align_sequences(const std::string& ref, const std::string& query
         bool row_exceeded = true;
         
         for (int j = start_j; j <= end_j; j++) {
-            if (toupper(ref[i-1]) == toupper(query[j-1])) {
+            if (iupac_match(ref[i-1], query[j-1])) {
                 dp[i][j] = dp[i-1][j-1];  // Match
             } else {
                 int del = (j > 1 && i - j + 1 <= max_dist) ? dp[i-1][j] : max_dist + 1;
@@ -224,7 +262,7 @@ AlignmentResult align_sequences(const std::string& ref, const std::string& query
     
     int i = m, j = n;
     while (i > 0 || j > 0) {
-        if (i > 0 && j > 0 && toupper(ref[i-1]) == toupper(query[j-1])) {
+        if (i > 0 && j > 0 && iupac_match(ref[i-1], query[j-1])) {
             // Match
             cigar_ops.push_back('M');
             visual_chars.push_back('.');
@@ -306,50 +344,68 @@ int levenshtein_distance(const std::string& s1, const std::string& s2) {
     return dp[m][n];
 }
 
-// Expand IUPAC pattern to all possible sequences
-std::vector<std::string> expand_iupac(const std::string& pattern) {
-    std::vector<std::string> result = {""};
+// Expand IUPAC pattern to include both forward and reverse complement
+// We'll use IUPAC matching in align_sequences
+std::vector<std::pair<std::string, bool>> expand_iupac_with_rc(const std::string& pattern) {
+    std::vector<std::pair<std::string, bool>> result;
     
-    for (char c : pattern) {
-        char uc = toupper(c);
-        auto it = IUPAC_CODES.find(uc);
-        std::string options = (it != IUPAC_CODES.end()) ? it->second : "N";
-        
-        std::vector<std::string> new_result;
-        for (const auto& prefix : result) {
-            for (char nucleotide : options) {
-                new_result.push_back(prefix + nucleotide);
-            }
-        }
-        result = new_result;
+    // Add forward pattern
+    result.push_back({pattern, false});  // false = forward strand
+    
+    // Add reverse complement pattern
+    std::string rc_pattern = reverse_complement(pattern);
+    // Only add RC if it's different from forward (avoid palindromes counted twice)
+    if (rc_pattern != pattern) {
+        result.push_back({rc_pattern, true});  // true = reverse strand
     }
     
     return result;
 }
 
 // Process a sequence chunk to find motif variants
-void process_sequence(const std::string& seq, const std::vector<std::string>& expanded_patterns,
-                      int max_distance, bool count_reverse) {
+void process_sequence(const std::string& seq, const std::string& chr_name,
+                      const std::vector<std::pair<std::string, bool>>& patterns_with_strand,
+                      int max_distance) {
     
     std::map<std::string, MotifStats> local_stats;
-    int pattern_len = expanded_patterns[0].length();
+    std::vector<MotifOccurrence> local_occurrences;
     
-    // OPTIMIZATION 4: Pre-filter using rolling hash for exact matches
-    // This avoids expensive edit distance calculations for most windows
-    std::unordered_set<uint64_t> pattern_hashes;
-    for (const auto& pattern : expanded_patterns) {
-        uint64_t hash = 0;
-        for (char c : pattern) {
-            hash = hash * 31 + toupper(c);
-        }
-        pattern_hashes.insert(hash);
-    }
+    if (patterns_with_strand.empty()) return;
+    int pattern_len = patterns_with_strand[0].first.length();
+    
+    
+    // OPTIMIZATION: Skip long stretches of Ns
+    size_t skip_until = 0;
+    
+    // Track last match position to avoid overlaps
+    size_t last_match_end = 0;
     
     // Slide through the sequence
     for (size_t i = 0; i <= seq.length() - pattern_len; ++i) {
+        // Skip if we're in a skip region
+        if (i < skip_until) continue;
+        
+        // Skip if we're still within the last match
+        if (i < last_match_end) continue;
+        
         // Update progress every 10000 bases
         if (i % 10000 == 0) {
             bases_processed.fetch_add(10000);
+        }
+        
+        // Check for N-rich region and skip it
+        if (seq[i] == 'N' || seq[i] == 'n') {
+            size_t n_count = 0;
+            size_t j = i;
+            while (j < seq.length() && (seq[j] == 'N' || seq[j] == 'n')) {
+                n_count++;
+                j++;
+            }
+            if (n_count > static_cast<size_t>(pattern_len)) {
+                skip_until = j;
+                i = j - 1;  // Will be incremented by loop
+                continue;
+            }
         }
         
         // OPTIMIZATION 5: Check exact length first (most common case)
@@ -372,70 +428,65 @@ void process_sequence(const std::string& seq, const std::vector<std::string>& ex
                 // Convert to uppercase for comparison
                 std::transform(window.begin(), window.end(), window.begin(), ::toupper);
                 
-                // OPTIMIZATION 6: Check hash first for exact matches
-                uint64_t window_hash = 0;
-                for (char c : window) {
-                    window_hash = window_hash * 31 + c;
-                }
-                
-                // Quick exact match check
-                if (pattern_hashes.count(window_hash)) {
-                    // Exact match found
-                    if (local_stats.find(window) == local_stats.end()) {
-                        local_stats[window].sequence = window;
-                        local_stats[window].alignment = std::string(pattern_len, '.');
-                        local_stats[window].edit_distance = 0;
-                        local_stats[window].cigar = std::to_string(pattern_len) + "M";
-                    }
-                    if (count_reverse) {
-                        local_stats[window].count_reverse++;
-                    } else {
-                        local_stats[window].count_forward++;
-                    }
-                    found_match = true;
-                } else {
-                    // Not exact match, try edit distance
+                // Check against pattern(s) using IUPAC matching
+                {
                     int min_dist = max_distance + 1;
                     std::string best_cigar;
                     std::string best_visual;
+                    bool best_is_reverse = false;
                     
-                    for (const auto& pattern : expanded_patterns) {
+                    for (const auto& [pattern, is_reverse] : patterns_with_strand) {
                         auto result = align_sequences(pattern, window, max_distance);
                         if (result.edit_distance >= 0 && result.edit_distance <= max_distance && result.edit_distance < min_dist) {
                             min_dist = result.edit_distance;
                             best_cigar = result.cigar;
                             best_visual = result.visual_alignment;
+                            best_is_reverse = is_reverse;
                         }
                     }
                     
                     if (min_dist <= max_distance) {
-                        if (local_stats.find(window) == local_stats.end()) {
-                            local_stats[window].sequence = window;
-                            local_stats[window].alignment = best_visual;
-                            local_stats[window].edit_distance = min_dist;
-                            local_stats[window].cigar = best_cigar;
+                        // For reverse strand matches, convert back to forward orientation for consensus
+                        std::string consensus_seq = best_is_reverse ? reverse_complement(window) : window;
+                        
+                        if (local_stats.find(consensus_seq) == local_stats.end()) {
+                            local_stats[consensus_seq].sequence = consensus_seq;
+                            local_stats[consensus_seq].alignment = best_visual;
+                            local_stats[consensus_seq].edit_distance = min_dist;
+                            local_stats[consensus_seq].cigar = best_cigar;
                         }
-                        if (count_reverse) {
-                            local_stats[window].count_reverse++;
+                        if (best_is_reverse) {
+                            local_stats[consensus_seq].count_reverse++;
                         } else {
-                            local_stats[window].count_forward++;
+                            local_stats[consensus_seq].count_forward++;
                         }
+                        
+                        // Record position
+                        MotifOccurrence occ;
+                        occ.chr = chr_name;
+                        occ.start = i;
+                        occ.end = i + pattern_len;
+                        occ.motif = consensus_seq;  // Use forward-oriented sequence
+                        occ.edit_distance = min_dist;
+                        occ.strand = best_is_reverse ? '-' : '+';
+                        local_occurrences.push_back(occ);
+                        
                         found_match = true;
+                        last_match_end = i + pattern_len;  // Skip past this match
                     }
                 }
             }
         }
         
-        // Only try different lengths if exact length didn't match and we allow indels
+        // For handling internal indels: check windows of different lengths but verify indel is internal
         if (!found_match && max_distance > 0) {
-            // Try other lengths (skip len_diff = 0 as we already tried it)
-            for (int len_diff = -max_distance; len_diff <= max_distance; len_diff++) {
-                if (len_diff == 0) continue;  // Already tried
+            // Only check slightly different lengths for internal indels
+            for (int len_diff = -1; len_diff <= 1; len_diff++) {
+                if (len_diff == 0) continue;  // Already tried exact length
                 
                 int window_len = pattern_len + len_diff;
-                if (window_len < 1 || i + window_len > seq.length()) {
-                    continue;
-                }
+                if (window_len < pattern_len - 1 || window_len > pattern_len + 1) continue;
+                if (i + window_len > seq.length()) continue;
                 
                 std::string window = seq.substr(i, window_len);
                 
@@ -446,33 +497,73 @@ void process_sequence(const std::string& seq, const std::vector<std::string>& ex
                 
                 std::transform(window.begin(), window.end(), window.begin(), ::toupper);
                 
+                // Check alignment and verify indel is internal (not at flanks)
                 int min_dist = max_distance + 1;
                 std::string best_cigar;
                 std::string best_visual;
+                bool best_is_reverse = false;
                 
-                for (const auto& pattern : expanded_patterns) {
+                for (const auto& [pattern, is_reverse] : patterns_with_strand) {
                     auto result = align_sequences(pattern, window, max_distance);
-                    if (result.edit_distance >= 0 && result.edit_distance <= max_distance && result.edit_distance < min_dist) {
-                        min_dist = result.edit_distance;
-                        best_cigar = result.cigar;
-                        best_visual = result.visual_alignment;
+                    if (result.edit_distance > 0 && result.edit_distance <= max_distance && result.edit_distance < min_dist) {
+                        // Check if the indel is internal by examining CIGAR
+                        // Flanking indels would start/end with I or D
+                        if (!result.cigar.empty()) {
+                            bool starts_with_indel = (result.cigar[0] == 'I' || result.cigar[0] == 'D');
+                            bool ends_with_indel = false;
+                            
+                            // Find last operation in CIGAR
+                            size_t last_op_pos = result.cigar.find_last_of("MIDX");
+                            if (last_op_pos != std::string::npos) {
+                                char last_op = result.cigar[last_op_pos];
+                                ends_with_indel = (last_op == 'I' || last_op == 'D');
+                            }
+                            
+                            // Skip if indel is at flanks
+                            if (starts_with_indel || ends_with_indel) {
+                                continue;
+                            }
+                            
+                            // This is an internal indel - accept it
+                            min_dist = result.edit_distance;
+                            best_cigar = result.cigar;
+                            best_visual = result.visual_alignment;
+                            best_is_reverse = is_reverse;
+                        }
                     }
                 }
                 
                 if (min_dist <= max_distance) {
-                    if (local_stats.find(window) == local_stats.end()) {
-                        local_stats[window].sequence = window;
-                        local_stats[window].alignment = best_visual;
-                        local_stats[window].edit_distance = min_dist;
-                        local_stats[window].cigar = best_cigar;
+                    // For reverse strand matches, convert back to forward orientation for consensus
+                    std::string consensus_seq = best_is_reverse ? reverse_complement(window) : window;
+                    
+                    if (local_stats.find(consensus_seq) == local_stats.end()) {
+                        local_stats[consensus_seq].sequence = consensus_seq;
+                        local_stats[consensus_seq].alignment = best_visual;
+                        local_stats[consensus_seq].edit_distance = min_dist;
+                        local_stats[consensus_seq].cigar = best_cigar;
                     }
-                    if (count_reverse) {
-                        local_stats[window].count_reverse++;
+                    if (best_is_reverse) {
+                        local_stats[consensus_seq].count_reverse++;
                     } else {
-                        local_stats[window].count_forward++;
+                        local_stats[consensus_seq].count_forward++;
                     }
-                    break;  // Don't count overlapping variants
+                    
+                    // Record position
+                    MotifOccurrence occ;
+                    occ.chr = chr_name;
+                    occ.start = i;
+                    occ.end = i + window_len;
+                    occ.motif = consensus_seq;  // Use forward-oriented sequence
+                    occ.edit_distance = min_dist;
+                    occ.strand = best_is_reverse ? '-' : '+';
+                    local_occurrences.push_back(occ);
+                    
+                    last_match_end = i + window_len;
+                    found_match = true;
                 }
+                
+                if (found_match) break;
             }
         }
     }
@@ -481,35 +572,42 @@ void process_sequence(const std::string& seq, const std::vector<std::string>& ex
     bases_processed.fetch_add(seq.length() % 10000);
     
     // Merge local stats into global
-    std::lock_guard<std::mutex> lock(stats_mutex);
-    for (const auto& pair : local_stats) {
-        const std::string& seq = pair.first;
-        const MotifStats& stats = pair.second;
-        
-        if (global_stats.find(seq) == global_stats.end()) {
-            global_stats[seq] = stats;
-        } else {
-            global_stats[seq].count_forward += stats.count_forward;
-            global_stats[seq].count_reverse += stats.count_reverse;
-            // CIGAR and edit_distance should already be the same for same sequence
+    {
+        std::lock_guard<std::mutex> lock(stats_mutex);
+        for (const auto& pair : local_stats) {
+            const std::string& seq = pair.first;
+            const MotifStats& stats = pair.second;
+            
+            if (global_stats.find(seq) == global_stats.end()) {
+                global_stats[seq] = stats;
+            } else {
+                global_stats[seq].count_forward += stats.count_forward;
+                global_stats[seq].count_reverse += stats.count_reverse;
+                // CIGAR and edit_distance should already be the same for same sequence
+            }
         }
+    }
+    
+    // Merge local occurrences into global
+    {
+        std::lock_guard<std::mutex> lock(occurrences_mutex);
+        global_occurrences.insert(global_occurrences.end(), 
+                                  local_occurrences.begin(), 
+                                  local_occurrences.end());
     }
 }
 
 // Process a FASTA file chunk
 void process_fasta_chunk(const std::vector<std::pair<std::string, std::string>>& sequences,
-                         const std::vector<std::string>& expanded_patterns,
+                         const std::vector<std::pair<std::string, bool>>& patterns_with_strand,
                          int max_distance) {
     
     for (const auto& seq_pair : sequences) {
+        const std::string& chr_name = seq_pair.first;
         const std::string& seq = seq_pair.second;
         
-        // Process forward strand
-        process_sequence(seq, expanded_patterns, max_distance, false);
-        
-        // Process reverse strand
-        std::string rc = reverse_complement(seq);
-        process_sequence(rc, expanded_patterns, max_distance, true);
+        // Process only forward strand, searching for both forward and RC patterns
+        process_sequence(seq, chr_name, patterns_with_strand, max_distance);
     }
 }
 
@@ -543,6 +641,95 @@ std::vector<std::pair<std::string, std::string>> read_fasta(const std::string& f
     
     file.close();
     return sequences;
+}
+
+// Write BED file with all motif positions
+void write_bed(const std::string& filename, const std::vector<MotifOccurrence>& occurrences) {
+    std::ofstream out(filename);
+    if (!out.is_open()) {
+        std::cerr << "Error: Cannot create BED file " << filename << std::endl;
+        return;
+    }
+    
+    // Sort by chromosome and position
+    std::vector<MotifOccurrence> sorted_occ = occurrences;
+    std::sort(sorted_occ.begin(), sorted_occ.end(),
+              [](const MotifOccurrence& a, const MotifOccurrence& b) {
+                  if (a.chr != b.chr) return a.chr < b.chr;
+                  return a.start < b.start;
+              });
+    
+    // Write BED entries
+    for (const auto& occ : sorted_occ) {
+        out << occ.chr << "\t" 
+            << occ.start << "\t" 
+            << occ.end << "\t"
+            << occ.motif << "\t"
+            << occ.edit_distance << "\t"
+            << occ.strand << "\n";
+    }
+    
+    out.close();
+    std::cout << "Wrote " << sorted_occ.size() << " motif positions to BED file\n";
+}
+
+// Generate consensus logo matrix
+void write_logo_matrix(const std::string& filename, 
+                       const std::map<std::string, MotifStats>& stats,
+                       int motif_length) {
+    std::ofstream out(filename);
+    if (!out.is_open()) {
+        std::cerr << "Error: Cannot create logo matrix file " << filename << std::endl;
+        return;
+    }
+    
+    // Calculate position-specific nucleotide frequencies weighted by occurrence count
+    std::vector<std::map<char, double>> position_freq(motif_length);
+    
+    size_t total_count = 0;
+    for (const auto& [seq, stat] : stats) {
+        size_t count = stat.count_total;
+        total_count += count;
+        
+        // Add this sequence's contribution to each position
+        for (size_t i = 0; i < seq.length() && i < static_cast<size_t>(motif_length); ++i) {
+            position_freq[i][seq[i]] += count;
+        }
+    }
+    
+    // Write header
+    out << "Position\tA\tC\tG\tT\tEntropy\tInfo_Content\n";
+    
+    // Calculate and write frequencies for each position
+    for (int pos = 0; pos < motif_length; ++pos) {
+        double freq_A = position_freq[pos]['A'] / total_count;
+        double freq_C = position_freq[pos]['C'] / total_count;
+        double freq_G = position_freq[pos]['G'] / total_count;
+        double freq_T = position_freq[pos]['T'] / total_count;
+        
+        // Calculate Shannon entropy
+        double entropy = 0;
+        for (double f : {freq_A, freq_C, freq_G, freq_T}) {
+            if (f > 0) {
+                entropy -= f * log2(f);
+            }
+        }
+        
+        // Information content (max entropy = 2 for 4 nucleotides)
+        double info_content = 2 - entropy;
+        
+        out << (pos + 1) << "\t"
+            << std::fixed << std::setprecision(4)
+            << freq_A << "\t"
+            << freq_C << "\t"
+            << freq_G << "\t"
+            << freq_T << "\t"
+            << entropy << "\t"
+            << info_content << "\n";
+    }
+    
+    out.close();
+    std::cout << "Wrote consensus logo matrix to " << filename << "\n";
 }
 
 // Write results to TSV
@@ -672,10 +859,10 @@ int main(int argc, char* argv[]) {
     std::cout << "Max edit distance: " << max_distance << "\n";
     std::cout << "Threads: " << num_threads << "\n\n";
     
-    // Expand IUPAC codes in the reference motif
-    std::cout << "Expanding IUPAC codes...\n";
-    std::vector<std::string> expanded_patterns = expand_iupac(motif);
-    std::cout << "Expanded to " << expanded_patterns.size() << " pattern(s)\n";
+    // Process IUPAC codes in the reference motif
+    std::cout << "Using IUPAC-aware matching for pattern: " << motif << "\n";
+    std::vector<std::pair<std::string, bool>> patterns_with_strand = expand_iupac_with_rc(motif);
+    std::cout << "Will search for forward pattern and its reverse complement\n";
     
     // Read genome
     std::cout << "Reading genome from " << genome_file << "...\n";
@@ -694,7 +881,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Total genome size: " << (genome_size / 1000000) << " Mb\n\n";
     
     // Initialize progress tracking
-    total_bases = genome_size * 2;  // Forward and reverse strands
+    total_bases = genome_size;  // Only forward strand now
     bases_processed = 0;
     
     // Process sequences in parallel
@@ -703,21 +890,25 @@ int main(int argc, char* argv[]) {
     // Start progress bar thread
     std::thread progress_thread(show_progress);
     
-    // Divide work among threads
-    size_t chunk_size = (sequences.size() + num_threads - 1) / num_threads;
+    // Divide work among threads more efficiently
     std::vector<std::thread> threads;
+    threads.reserve(num_threads);
+    
+    // Create work queue
+    std::atomic<size_t> work_index(0);
     
     for (int t = 0; t < num_threads; ++t) {
-        size_t start = t * chunk_size;
-        size_t end = std::min(start + chunk_size, sequences.size());
-        
-        if (start < sequences.size()) {
-            threads.emplace_back([&sequences, start, end, &expanded_patterns, max_distance]() {
-                std::vector<std::pair<std::string, std::string>> chunk(
-                    sequences.begin() + start, sequences.begin() + end);
-                process_fasta_chunk(chunk, expanded_patterns, max_distance);
-            });
-        }
+        threads.emplace_back([&sequences, &work_index, &patterns_with_strand, max_distance]() {
+            while (true) {
+                size_t idx = work_index.fetch_add(1);
+                if (idx >= sequences.size()) break;
+                
+                // Process single sequence
+                std::vector<std::pair<std::string, std::string>> single_seq;
+                single_seq.push_back(sequences[idx]);
+                process_fasta_chunk(single_seq, patterns_with_strand, max_distance);
+            }
+        });
     }
     
     // Wait for all threads
@@ -735,10 +926,21 @@ int main(int argc, char* argv[]) {
     }
     
     std::cout << "\nFound " << global_stats.size() << " unique variants\n";
+    std::cout << "Found " << global_occurrences.size() << " total occurrences\n";
     
     // Write results
-    std::cout << "Writing results to " << output_file << "...\n";
+    std::cout << "Writing results...\n";
+    
+    // Write TSV summary
     write_tsv(output_file, global_stats);
+    
+    // Write BED file with positions
+    std::string bed_file = output_file.substr(0, output_file.rfind('.')) + ".bed";
+    write_bed(bed_file, global_occurrences);
+    
+    // Write logo matrix
+    std::string logo_file = output_file.substr(0, output_file.rfind('.')) + "_logo.tsv";
+    write_logo_matrix(logo_file, global_stats, motif.length());
     
     std::cout << "\nDone!\n";
     

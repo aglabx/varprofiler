@@ -8,145 +8,45 @@ by converting matched positions to lowercase in the sequences.
 
 import argparse
 import pandas as pd
-import re
 import sys
-from collections import defaultdict
 
-try:
-    from tqdm import tqdm
-except ImportError:
-    def tqdm(iterable, total=None, desc=None):
-        if desc:
-            print(f"{desc}...")
-        return iterable
+# Import from our new modules
+from varprofiler.utils.utils import get_tqdm, write_fasta
+from varprofiler.utils.motif_utils import (
+    find_motif_positions,
+    mark_motifs_in_sequence,
+    load_motifs_from_file,
+    calculate_motif_statistics
+)
 
-
-def reverse_complement(seq):
-    """Get reverse complement of DNA sequence."""
-    complement = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G', 
-                  'N': 'N', 'R': 'Y', 'Y': 'R', 'S': 'S', 
-                  'W': 'W', 'K': 'M', 'M': 'K', 'B': 'V',
-                  'V': 'B', 'D': 'H', 'H': 'D'}
-    return ''.join(complement.get(c.upper(), c) for c in seq[::-1])
+# Get tqdm with fallback
+tqdm = get_tqdm()
 
 
-def find_motif_positions(sequence, motif, both_strands=True):
+def mark_motifs_with_stats(sequence, motifs):
     """
-    Find all positions of a motif in a sequence.
-    Returns list of (start, end) positions.
-    """
-    positions = []
-    seq_upper = sequence.upper()
-    motif_upper = motif.upper()
-    motif_len = len(motif_upper)
-    
-    # Find forward strand matches
-    start = 0
-    while True:
-        pos = seq_upper.find(motif_upper, start)
-        if pos == -1:
-            break
-        positions.append((pos, pos + motif_len))
-        start = pos + 1
-    
-    # Find reverse strand matches if requested
-    if both_strands:
-        rc_motif = reverse_complement(motif_upper)
-        if rc_motif != motif_upper:  # Avoid double marking palindromes
-            start = 0
-            while True:
-                pos = seq_upper.find(rc_motif, start)
-                if pos == -1:
-                    break
-                positions.append((pos, pos + motif_len))
-                start = pos + 1
-    
-    return positions
-
-
-def mark_motifs_in_sequence(sequence, motifs):
-    """
-    Mark motif occurrences in sequence by converting to lowercase.
+    Mark motif occurrences and return statistics.
     
     Args:
         sequence: DNA sequence
         motifs: List of motif sequences
     
     Returns:
-        Tuple of (modified sequence, marked positions count, total motif occurrences)
+        Tuple of (marked sequence, marked positions count, total motif occurrences)
     """
-    if isinstance(motifs, str):
-        motifs = [motifs]
+    # Use utility function to mark motifs
+    marked_seq = mark_motifs_in_sequence(sequence, motifs)
     
-    # Create a position mask for lowercase conversion
-    seq_len = len(sequence)
-    lowercase_mask = [False] * seq_len
+    # Count marked positions and total motifs
+    marked_count = sum(1 for c in marked_seq if c.islower())
     
-    # Find all motif positions and count occurrences
+    # Count total motif occurrences
     total_motif_count = 0
     for motif in motifs:
         positions = find_motif_positions(sequence, motif, both_strands=True)
         total_motif_count += len(positions)
-        for start, end in positions:
-            for i in range(start, min(end, seq_len)):
-                lowercase_mask[i] = True
     
-    # Apply the mask to create the output sequence
-    result = []
-    marked_count = 0
-    for i, char in enumerate(sequence):
-        if lowercase_mask[i]:
-            result.append(char.lower())
-            marked_count += 1
-        else:
-            result.append(char.upper())
-    
-    return ''.join(result), marked_count, total_motif_count
-
-
-def load_motifs(motif_file, top_n=None, min_count=0):
-    """
-    Load motifs from motif_discovery output file or text file.
-    
-    Args:
-        motif_file: TSV file from motif_discovery or text file with motifs
-        top_n: Load only top N motifs
-        min_count: Minimum total count to include motif
-    
-    Returns:
-        List of motif sequences
-    """
-    print(f"Loading motifs from {motif_file}...")
-    
-    try:
-        # Try to load as TSV from motif_discovery
-        df = pd.read_csv(motif_file, sep='\t')
-        
-        # Check if it has expected columns
-        if 'motif' in df.columns:
-            # Filter by minimum count if column exists
-            if 'count_total' in df.columns and min_count > 0:
-                df = df[df['count_total'] >= min_count]
-            
-            # Get top N if specified
-            if top_n:
-                df = df.head(top_n)
-            
-            motifs = df['motif'].tolist()
-            print(f"  Loaded {len(motifs)} motifs from TSV")
-            return motifs
-    except:
-        pass
-    
-    # Load as plain text file with one motif per line
-    with open(motif_file, 'r') as f:
-        motifs = [line.strip() for line in f if line.strip()]
-    
-    if top_n:
-        motifs = motifs[:top_n]
-    
-    print(f"  Loaded {len(motifs)} motifs from text file")
-    return motifs
+    return marked_seq, marked_count, total_motif_count
 
 
 def process_monomer_file(monomer_file, motifs, output_file, 
@@ -187,21 +87,16 @@ def process_monomer_file(monomer_file, motifs, output_file,
     for idx, row in tqdm(df.iterrows(), total=len(df), desc="Marking motifs"):
         sequence = row['sequence']
         
-        # Mark motifs
-        marked_seq, marked_count, total_motifs = mark_motifs_in_sequence(sequence, motifs)
+        # Mark motifs and get statistics
+        marked_seq, marked_count, total_motifs = mark_motifs_with_stats(sequence, motifs)
         marked_sequences.append(marked_seq)
         motif_counts_list.append(total_motifs)
         
-        # Calculate statistics
+        # Calculate coverage
         coverage = (marked_count / len(sequence)) * 100 if len(sequence) > 0 else 0
         
-        # Count individual motif occurrences for detailed stats
-        motif_counts = {}
-        for motif in motifs[:10]:  # Count top 10 motifs individually
-            positions = find_motif_positions(sequence, motif, both_strands=True)
-            motif_counts[motif] = len(positions)
-        
-        stats.append({
+        # Build statistics record
+        stats_record = {
             'sequence_id': row['sequence_id'],
             'orientation': row['orientation'],
             'index': row['index'],
@@ -209,9 +104,15 @@ def process_monomer_file(monomer_file, motifs, output_file,
             'length': row['length'],
             'marked_bp': marked_count,
             'coverage_pct': coverage,
-            'total_motif_hits': total_motifs,
-            **{f'motif_{i+1}_count': count for i, count in enumerate(motif_counts.values())}
-        })
+            'total_motif_hits': total_motifs
+        }
+        
+        # Add individual motif counts for top motifs
+        for i, motif in enumerate(motifs[:10]):  # Count top 10 motifs
+            positions = find_motif_positions(sequence, motif, both_strands=True)
+            stats_record[f'motif_{i+1}_count'] = len(positions)
+        
+        stats.append(stats_record)
     
     # Add marked sequences and motif counts to dataframe
     df['marked_sequence'] = marked_sequences
@@ -228,10 +129,18 @@ def process_monomer_file(monomer_file, motifs, output_file,
         stats_df.to_csv(stats_file, sep='\t', index=False)
     
     # Print summary
+    print_summary(df, stats)
+    
+    return df, pd.DataFrame(stats)
+
+
+def print_summary(df, stats):
+    """Print summary statistics."""
     print("\n=== SUMMARY ===")
     
     # Group by sequence_id
-    grouped = pd.DataFrame(stats).groupby('sequence_id')
+    stats_df = pd.DataFrame(stats)
+    grouped = stats_df.groupby('sequence_id')
     print(f"Total sequence IDs: {len(grouped)}")
     
     # Count sequences with/without motifs
@@ -241,7 +150,7 @@ def process_monomer_file(monomer_file, motifs, output_file,
     print(f"Sequences without motifs: {len(without_motifs)} ({len(without_motifs)/len(df)*100:.1f}%)")
     
     # Statistics by type
-    type_stats = pd.DataFrame(stats).groupby('type').agg({
+    type_stats = stats_df.groupby('type').agg({
         'coverage_pct': ['mean', 'std', 'min', 'max'],
         'total_motif_hits': ['sum', 'mean']
     }).round(2)
@@ -251,21 +160,19 @@ def process_monomer_file(monomer_file, motifs, output_file,
     # Motif count distribution
     print("\nMotif count distribution:")
     motif_dist = df['motif_count'].value_counts().sort_index()
-    for count in range(min(6, motif_dist.index.max() + 1)):
+    for count in range(min(6, motif_dist.index.max() + 1) if len(motif_dist) > 0 else 0):
         n_seqs = motif_dist.get(count, 0)
         print(f"  {count} motifs: {n_seqs} sequences ({n_seqs/len(df)*100:.1f}%)")
-    if motif_dist.index.max() > 5:
+    if len(motif_dist) > 0 and motif_dist.index.max() > 5:
         n_seqs = motif_dist[motif_dist.index > 5].sum()
         print(f"  >5 motifs: {n_seqs} sequences ({n_seqs/len(df)*100:.1f}%)")
     
     # Find monomers with highest motif density
-    monomer_stats = pd.DataFrame(stats)[pd.DataFrame(stats)['type'] == 'MONOMER']
+    monomer_stats = stats_df[stats_df['type'] == 'MONOMER']
     if len(monomer_stats) > 0:
         top_monomers = monomer_stats.nlargest(10, 'coverage_pct')
         print("\nTop 10 monomers by motif coverage:")
         print(top_monomers[['sequence_id', 'index', 'length', 'coverage_pct', 'total_motif_hits']])
-    
-    return df, pd.DataFrame(stats)
 
 
 def generate_fasta(df, output_file, min_coverage=0):
@@ -279,34 +186,31 @@ def generate_fasta(df, output_file, min_coverage=0):
     """
     print(f"\nGenerating FASTA file: {output_file}")
     
-    with open(output_file, 'w') as f:
-        for idx, row in df.iterrows():
-            # Calculate coverage if needed
-            if min_coverage > 0:
-                marked_count = sum(1 for c in row['marked_sequence'] if c.islower())
-                coverage = (marked_count / len(row['sequence'])) * 100
-                if coverage < min_coverage:
-                    continue
-            
-            # Create header
-            header = f">{row['sequence_id']}_{row['type']}_{row['index']}"
-            header += f" ori={row['orientation']} len={row['length']}"
-            
-            # Add coverage if available
-            if 'marked_sequence' in row:
-                marked_count = sum(1 for c in row['marked_sequence'] if c.islower())
-                coverage = (marked_count / len(row['sequence'])) * 100
-                header += f" motif_coverage={coverage:.1f}%"
-            
-            # Write sequence
-            f.write(header + '\n')
-            seq = row.get('marked_sequence', row['sequence'])
-            
-            # Wrap at 80 characters
-            for i in range(0, len(seq), 80):
-                f.write(seq[i:i+80] + '\n')
+    fasta_sequences = []
     
-    print(f"  FASTA file written")
+    for idx, row in df.iterrows():
+        # Calculate coverage if needed
+        marked_seq = row.get('marked_sequence', row['sequence'])
+        marked_count = sum(1 for c in marked_seq if c.islower())
+        coverage = (marked_count / len(marked_seq)) * 100 if len(marked_seq) > 0 else 0
+        
+        if coverage < min_coverage:
+            continue
+        
+        # Create header
+        header_parts = [
+            f"{row['sequence_id']}_{row['type']}_{row['index']}",
+            f"ori={row['orientation']}",
+            f"len={row['length']}",
+            f"motif_coverage={coverage:.1f}%"
+        ]
+        
+        header = ' '.join(header_parts)
+        fasta_sequences.append((header, marked_seq))
+    
+    # Write using utility function
+    write_fasta(fasta_sequences, output_file, wrap_length=80)
+    print(f"  FASTA file written with {len(fasta_sequences)} sequences")
 
 
 def main():
@@ -342,8 +246,11 @@ def main():
         motifs = [args.single_motif]
         print(f"Using single motif: {args.single_motif}")
     else:
-        # Load from file
-        motifs = load_motifs(args.motif_file, args.top_motifs, args.min_count)
+        # Load from file using utility function
+        motifs = load_motifs_from_file(args.motif_file, 
+                                       top_n=args.top_motifs, 
+                                       min_count=args.min_count)
+        print(f"Loaded {len(motifs)} motifs")
     
     # Process monomer file
     df, stats = process_monomer_file(

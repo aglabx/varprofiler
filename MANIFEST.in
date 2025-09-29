@@ -1,0 +1,21 @@
+# Include C++ source files
+recursive-include varprofiler/cpp *.cpp *.hpp *.h Makefile
+
+# Include package data
+recursive-include varprofiler *.md
+
+# Include documentation
+include README.md
+include LICENSE
+include requirements.txt
+
+# Include test data if available
+recursive-include tests *.py *.fa *.bed *.tsv
+
+# Exclude compiled files
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude __pycache__
+global-exclude *.so
+global-exclude *.o
+global-exclude .DS_Store
